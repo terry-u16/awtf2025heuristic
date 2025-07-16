@@ -1,7 +1,7 @@
 mod anneling;
 mod clustering;
 mod naive;
-mod rand_greedy;
+mod naive_fast;
 
 use crate::problem::{Input, Output};
 

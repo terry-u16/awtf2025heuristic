@@ -4,7 +4,7 @@ use crate::{
     grid::{Coord, Map2d, D, L, R, U},
     problem::{Action, Input, Move, Output},
     random::RandExtension,
-    solver::naive,
+    solver::{naive, naive_fast},
 };
 use rand::{seq::SliceRandom, Rng};
 use std::{cmp::Reverse, time::Duration};
@@ -245,7 +245,8 @@ impl annealing::State for State {
             }
         }
 
-        let score = naive::solve_greedy(&input, &self.perm).score() + self.actions.len() as u32;
+        let (action_cnt, remaining_dist) = naive_fast::solve_greedy(&input, &self.perm);
+        let score = self.actions.len() as u32 + action_cnt + remaining_dist * 100;
 
         SingleScore(-(score as f64))
     }

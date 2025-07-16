@@ -1,26 +1,25 @@
-use crate::grid::{Coord, Map2d, D, L, R, U};
+use crate::data_structures::{FastClearArray, Queue};
+use crate::grid::{Coord, CoordIndex, Map2d, D, L, R, U};
 use crate::problem::{Action, Input, Move, Output};
 use rand::prelude::*;
 use std::collections::VecDeque;
 use std::time::Instant;
 
-pub fn solve_greedy(input: &Input, robot_order: &[usize]) -> Output {
-    // 壁は追加しない
-    let walls_v = input.init_walls_v.clone();
-    let walls_h = input.init_walls_h.clone();
-
+pub fn solve_greedy(input: &Input, robot_order: &[usize]) -> (u32, u32) {
     // グラフを構築
-    let graph = build_graph(input, &walls_v, &walls_h);
+    let graph = build_graph(input);
 
     // 現在のロボット位置
     let mut current_positions = input.init_robots.clone();
     let mut current_map = Map2d::with_default(Input::MAP_SIZE);
+    let mut queue = Queue::new();
+    let mut fast_clear_map = FastClearArray::new(Input::MAP_SIZE * Input::MAP_SIZE);
 
     for c in current_positions.iter() {
         current_map[*c] = true;
     }
 
-    let mut actions = Vec::new();
+    let mut total_dist = 0;
 
     // 各ロボットを順番に移動
     while current_positions
@@ -35,27 +34,19 @@ pub fn solve_greedy(input: &Input, robot_order: &[usize]) -> Output {
                 continue; // 目的地に到達しているロボットはスキップ
             }
 
-            let path = find_path(
-                current_positions[robot_id],
-                input.destinations[robot_id],
+            if let Some(path) = find_dist(
+                current_positions[robot_id].to_index(Input::MAP_SIZE),
+                input.destinations[robot_id].to_index(Input::MAP_SIZE),
                 &graph,
                 &current_map,
-                robot_id,
-            );
-
-            if let Some(path) = path {
+                &mut queue,
+                &mut fast_clear_map,
+            ) {
                 found = true;
                 current_map[current_positions[robot_id]] = false; // 現在位置を空にする
                 current_positions[robot_id] = input.destinations[robot_id]; // 目的地に移動
                 current_map[current_positions[robot_id]] = true; // 新しい位置を占有
-
-                for dir in path.iter() {
-                    // アクションを追加
-                    actions.push(Action::Robot(Move {
-                        index: robot_id,
-                        direction: *dir,
-                    }));
-                }
+                total_dist += path as u32;
             }
         }
 
@@ -66,25 +57,20 @@ pub fn solve_greedy(input: &Input, robot_order: &[usize]) -> Output {
     }
 
     // スコア計算
-    let mut total_distance = 0;
+    let mut remaining_dist = 0;
     for i in 0..input.robot_count {
         let current_coord = current_positions[i];
         let dest_coord = input.destinations[i];
-        total_distance += current_coord.dist(&dest_coord);
+        remaining_dist += current_coord.dist(&dest_coord) as u32;
     }
 
-    // 各ロボットを独立したグループにする
-    let groups = (0..input.robot_count).collect();
-
-    Output::new(walls_v, walls_h, groups, actions, total_distance as u32)
+    (total_dist, remaining_dist)
 }
 
-fn build_graph(
-    _input: &Input,
-    walls_v: &Map2d<bool>,
-    walls_h: &Map2d<bool>,
-) -> Map2d<[Option<Coord>; 4]> {
+fn build_graph(input: &Input) -> Map2d<[Option<CoordIndex>; 4]> {
     let mut graph = Map2d::from_fn(|_| [None; 4], Input::MAP_SIZE);
+    let walls_v = &input.init_walls_v;
+    let walls_h = &input.init_walls_h;
 
     for row in 0..Input::MAP_SIZE {
         for col in 0..Input::MAP_SIZE {
@@ -114,7 +100,7 @@ fn build_graph(
 
             for (dir, (new_row, new_col), can_move) in directions {
                 if can_move && new_row < Input::MAP_SIZE && new_col < Input::MAP_SIZE {
-                    graph[c][dir] = Some(Coord::new(new_row, new_col));
+                    graph[c][dir] = Some(Coord::new(new_row, new_col).to_index(Input::MAP_SIZE));
                 }
             }
         }
@@ -123,57 +109,40 @@ fn build_graph(
     graph
 }
 
-fn find_path(
-    start: Coord,
-    goal: Coord,
-    graph: &Map2d<[Option<Coord>; 4]>,
+fn find_dist(
+    start: CoordIndex,
+    goal: CoordIndex,
+    graph: &Map2d<[Option<CoordIndex>; 4]>,
     current_map: &Map2d<bool>,
-    robot_id: usize,
-) -> Option<Vec<usize>> {
+    queue: &mut Queue<(CoordIndex, u32)>,
+    visited: &mut FastClearArray,
+) -> Option<u32> {
     if current_map[goal] {
         return None;
     }
 
-    let mut queue = VecDeque::new();
-    let mut visited = Map2d::with_default(Input::MAP_SIZE);
-    let mut parent = Map2d::with_default(Input::MAP_SIZE);
+    queue.clear();
+    visited.clear();
 
-    queue.push_back(start);
-    visited[start] = true;
+    queue.push((start, 0));
+    visited.set_true(start.0);
 
-    while let Some(current) = queue.pop_front() {
-        if current == goal {
-            break;
-        }
-
-        let current_coord = current;
+    while let Some(&(pos, dist)) = queue.pop() {
         for direction in 0..4 {
-            if let Some(next_pos) = graph[current_coord][direction] {
-                if !visited[next_pos] && !current_map[next_pos] {
-                    visited[next_pos] = true;
-                    parent[next_pos] = (current, direction);
-                    queue.push_back(next_pos);
+            if let Some(next_pos) = graph[pos][direction] {
+                if !visited.get(next_pos.0) && !current_map[next_pos] {
+                    if next_pos == goal {
+                        return Some(dist + 1);
+                    }
+
+                    visited.set_true(next_pos.0);
+                    queue.push((next_pos, dist + 1));
                 }
             }
         }
     }
 
-    if !visited[goal] {
-        return None; // Goal not reachable
-    }
-
-    // パスを復元
-    let mut path = Vec::new();
-    let mut current = goal;
-
-    while current != start {
-        let (prev_pos, direction) = parent[current];
-        path.push(direction);
-        current = prev_pos;
-    }
-
-    path.reverse();
-    Some(path)
+    None
 }
 
 fn move_robot(pos: Coord, direction: usize, graph: &Map2d<[Option<Coord>; 4]>) -> Option<Coord> {
