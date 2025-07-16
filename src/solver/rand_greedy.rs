@@ -1,10 +1,9 @@
 use crate::{
-    grid::{Coord, D, DIRECTIONS, L, R, U},
+    grid::{D, L, R, U},
     problem::{Action, Input, Move, Output},
     solver::naive,
 };
-use itertools::Itertools;
-use rand::{Rng, SeedableRng};
+use rand::Rng;
 use rand_pcg::Pcg64Mcg;
 use std::cmp::Reverse;
 
@@ -38,7 +37,6 @@ pub(super) fn solve(input: &Input) -> Output {
 
         let mut output = naive::solve(&input);
 
-        output.score = output.score + actions.len() as u32;
         output.groups = groups;
         output.walls_v = input.init_walls_v.clone();
         output.walls_h = input.init_walls_h.clone();
@@ -46,13 +44,13 @@ pub(super) fn solve(input: &Input) -> Output {
         actions.extend(output.actions);
         output.actions = actions;
 
-        if output.score < best_output.score {
+        if output.score() < best_output.score() {
             best_output = output;
             break;
         }
     }
 
-    eprintln!("Best score: {}", best_output.score);
+    eprintln!("Best score: {}", best_output.score());
 
     best_output
 }

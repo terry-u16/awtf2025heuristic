@@ -13,9 +13,13 @@ pub(super) fn solve(input: &Input) -> Output {
     let mut rng = rand::thread_rng();
 
     while start_time.elapsed() < time_limit {
-        let output = solve_greedy(input, &mut rng);
-        if output.score < best_score {
-            best_score = output.score;
+        // ロボットの順番をランダムに決める
+        let mut robot_order: Vec<usize> = (0..input.robot_count).collect();
+        robot_order.shuffle(&mut rng);
+
+        let output = solve_greedy(input, &robot_order);
+        if output.score() < best_score {
+            best_score = output.score();
             best_output = Some(output);
         }
     }
@@ -33,7 +37,7 @@ pub(super) fn solve(input: &Input) -> Output {
     })
 }
 
-fn solve_greedy(input: &Input, rng: &mut impl Rng) -> Output {
+pub fn solve_greedy(input: &Input, robot_order: &[usize]) -> Output {
     // 壁は追加しない
     let walls_v = input.init_walls_v.clone();
     let walls_h = input.init_walls_h.clone();
@@ -41,16 +45,12 @@ fn solve_greedy(input: &Input, rng: &mut impl Rng) -> Output {
     // グラフを構築
     let graph = build_graph(input, &walls_v, &walls_h);
 
-    // ロボットの順番をランダムに決める
-    let mut robot_order: Vec<usize> = (0..input.robot_count).collect();
-    robot_order.shuffle(rng);
-
     // 現在のロボット位置
     let mut current_positions = input.init_robots.clone();
     let mut actions = Vec::new();
 
     // 各ロボットを順番に移動
-    for &robot_id in &robot_order {
+    for &robot_id in robot_order {
         let path = find_path(
             current_positions[robot_id],
             input.destinations[robot_id],
@@ -83,12 +83,10 @@ fn solve_greedy(input: &Input, rng: &mut impl Rng) -> Output {
         total_distance += current_coord.dist(&dest_coord);
     }
 
-    let score = actions.len() as u32 + 100 * total_distance as u32;
-
     // 各ロボットを独立したグループにする
     let groups = (0..input.robot_count).collect();
 
-    Output::new(walls_v, walls_h, groups, actions, score)
+    Output::new(walls_v, walls_h, groups, actions, total_distance as u32)
 }
 
 fn build_graph(

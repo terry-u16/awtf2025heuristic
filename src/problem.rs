@@ -117,7 +117,7 @@ pub struct Output {
     pub walls_h: Map2d<bool>,
     pub groups: Vec<usize>,
     pub actions: Vec<Action>,
-    pub score: u32,
+    pub remaining_dist: u32,
 }
 
 impl Output {
@@ -126,15 +126,19 @@ impl Output {
         walls_h: Map2d<bool>,
         groups: Vec<usize>,
         actions: Vec<Action>,
-        score: u32,
+        remaining_dist: u32,
     ) -> Self {
         Self {
             walls_v,
             walls_h,
             groups,
             actions,
-            score,
+            remaining_dist,
         }
+    }
+
+    pub fn score(&self) -> u32 {
+        self.actions.len() as u32 + self.remaining_dist * 100
     }
 
     pub fn write(&self) {
@@ -207,6 +211,7 @@ pub enum Action {
     Robot(Move),
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Move {
     /// index of robot or group
     pub index: usize,

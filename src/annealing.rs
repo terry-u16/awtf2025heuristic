@@ -1,0 +1,538 @@
+//! 焼きなましライブラリ
+#![macro_use]
+use itertools::{izip, Itertools};
+use rand::{distributions::Distribution, Rng as _};
+use rand_distr::WeightedAliasIndex;
+use rand_pcg::Pcg64Mcg;
+use std::{
+    cell::RefCell,
+    fmt::{Debug, Display},
+    rc::Rc,
+    time::{Duration, Instant},
+};
+
+pub type AnnealingRng = Pcg64Mcg;
+
+/// 焼きなましの状態
+pub trait State: Clone {
+    type Env;
+    type Score: Score;
+
+    /// 生スコア（大きいほど良い）
+    fn score(&self, env: &Self::Env) -> Self::Score;
+}
+
+pub trait Score {
+    /// 焼きなまし用スコア（大きいほど良い）
+    /// デフォルトでは生スコアをそのまま返す
+    #[allow(unused_variables)]
+    fn annealing_score(&self, progress: f64) -> f64 {
+        self.raw_score()
+    }
+
+    /// 生スコア
+    fn raw_score(&self) -> f64;
+}
+
+/// 単一の値からなるスコア
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct SingleScore(pub f64);
+
+impl Score for SingleScore {
+    fn raw_score(&self) -> f64 {
+        self.0
+    }
+}
+
+/// 焼きなましの近傍
+///
+/// * 受理パターンの流れ: `preprocess()` -> `eval()` -> `postprocess()`
+/// * 却下パターンの流れ: `preprocess()` -> `eval()` -> `rollback()`
+pub trait Neighbor: Sized {
+    type Env;
+    type State: State<Env = Self::Env>;
+
+    fn generate(
+        env: &Self::Env,
+        state: &Self::State,
+        rng: &mut AnnealingRng,
+        progress: f64,
+    ) -> Option<Self>;
+
+    /// `eval()` 前の変形操作を行う
+    fn preprocess(&mut self, env: &Self::Env, state: &mut Self::State);
+
+    /// 変形後の状態の評価を行う
+    ///
+    /// # Arguments
+    ///
+    /// * `env` - 環境
+    /// * `state` - 状態
+    /// * `progress` - 焼きなましの進捗（[0, 1]の範囲をとる）
+    /// * `threshold` - 近傍採用の閾値。新しいスコアがこの値を下回る場合はrejectされる
+    ///
+    /// # Returns
+    ///
+    /// 現在の状態のスコア。スコアが `threshold` を下回ることが明らかな場合は `None` を返すことで評価の打ち切りを行うことができる。
+    ///
+    /// 評価の打ち切りについては[焼きなまし法での評価関数の打ち切り](https://qiita.com/not522/items/cd20b87157d15850d31c)を参照。
+    #[allow(unused_variables)]
+    fn eval(
+        &mut self,
+        env: &Self::Env,
+        state: &Self::State,
+        progress: f64,
+        threshold: f64,
+    ) -> Option<<Self::State as State>::Score> {
+        Some(state.score(env))
+    }
+
+    /// `eval()` 後の変形操作を行う（2-optの区間reverse処理など）
+    fn postprocess(self, env: &Self::Env, state: &mut Self::State);
+
+    /// `preprocess()` で変形した `state` をロールバックする
+    fn rollback(self, env: &Self::Env, state: &mut Self::State);
+}
+
+pub trait NeighborDelegator: Sized {
+    type Env;
+    type State: State<Env = Self::Env>;
+
+    fn get_neighbor_weights() -> Vec<f64>;
+
+    fn get_neighbor_names() -> &'static [&'static str];
+
+    fn step(context: &mut AnnealingContext<Self::Env, Self::State>, neighbor_index: usize);
+}
+
+/// 近傍の委譲をするstructを生成するマクロ
+///
+/// `delegator_name` は生成するstructの名前、`env` は環境の型、`state` は状態の型を指定する。
+/// 各近傍は `variant => weight` の形式で指定する。
+/// `weight` はその近傍が選ばれる確率の重みを表す。焼きなまし実行時に遅延評価されるため、`weight` は定数である必要はない。
+///
+/// # Usage
+///
+/// ```ignore
+/// neighbors! {
+///     Neighbors, Env, State, [
+///         TwoOpt => 1.0,
+///         Swap => 2.0,
+///         Insert => 0.5,
+///     ]
+/// }
+///
+/// let (state, stats) = run_annealing::<Neighbors, SimdSelector, 128>(&input, state, 1e1, 1e-1, Duration::from_millis(1000), 42);
+/// ```
+#[macro_export]
+macro_rules! neighbors {
+    (
+        $delegator_name:ident, $env:ty, $state:ty, [
+            $( $variant:ident => $weight:expr ),+ $(,)?
+        ]
+    ) => {
+        use crate::annealing::Neighbor as _;
+
+        // generate()内のmatch式で使用するNEIGHBOR_INDEXを定義する
+        neighbors! {
+            @index 0; $($variant),+
+        }
+
+        // 本体
+        neighbors! {
+            @body
+            $delegator_name, $env, $state, [
+                $( $variant => $weight ),+
+            ]
+        }
+    };
+
+    (
+        @body
+        $delegator_name:ident, $env:ty, $state:ty, [
+            $( $variant:ident => $weight:expr ),+ $(,)?
+        ]
+    ) => {
+        struct $delegator_name;
+
+        impl $delegator_name {
+            thread_local!(static WEIGHTS: std::cell::RefCell<Vec<Box<dyn FnMut() -> f64>>> = std::cell::RefCell::new(vec![$(Box::new(|| $weight), )+]));
+            const NAMES: &'static [&'static str] = &[$(stringify!($variant), )+];
+        }
+
+        impl crate::annealing::NeighborDelegator for $delegator_name
+        {
+            type Env = $env;
+            type State = $state;
+
+            fn get_neighbor_weights() -> Vec<f64> {
+                // 重みの設定を遅延させる
+                Self::WEIGHTS.with(|weights| {
+                    weights.borrow_mut().iter_mut().map(|f| f()).collect()
+                })
+            }
+
+            fn get_neighbor_names() -> &'static [&'static str] {
+                Self::NAMES
+            }
+
+            fn step(context: &mut crate::annealing::AnnealingContext<Self::Env, Self::State>, neighbor_index: usize) {
+                match neighbor_index {
+                    $($variant::NEIGHBOR_INDEX => {
+                        let Some(neighbor) = $variant::generate(context.env, &context.state, &mut context.rng, context.progress) else {
+                            return;
+                        };
+                        context.step(neighbor, neighbor_index)
+                    }),*,
+                    _ => panic!("Invalid neighbor index: {}", neighbor_index),
+                }
+            }
+        }
+    };
+
+    // 近傍にNEIGHBOR_INDEXを定義する補助マクロ
+    // バリアントが複数残っているとき
+    (@index $idx:expr; $head:ident, $($tail:ident),+) => {
+        impl $head {
+            const NEIGHBOR_INDEX: usize = $idx;
+        }
+
+        neighbors! {
+            @index ($idx + 1); $($tail),+
+        }
+    };
+
+    // 最後のバリアント
+    (@index $idx:expr; $last:ident) => {
+        impl $last {
+            const NEIGHBOR_INDEX: usize = $idx;
+        }
+    };
+}
+
+/// 近傍選択のためのトレイト
+pub trait NeighborSelector {
+    fn new(weights: Vec<f64>) -> Self;
+    fn select(&self, rng: &mut AnnealingRng) -> usize;
+}
+
+/// WeightedAliasを使用した近傍選択
+pub struct WeightedAliasSelector {
+    alias: WeightedAliasIndex<f64>,
+}
+
+impl NeighborSelector for WeightedAliasSelector {
+    fn new(weights: Vec<f64>) -> Self {
+        let alias = WeightedAliasIndex::new(weights)
+            .expect("weights must be non-negative and not all zero");
+        Self { alias }
+    }
+
+    fn select(&self, rng: &mut AnnealingRng) -> usize {
+        self.alias.sample(rng)
+    }
+}
+
+/// SIMD命令を使用した近傍選択
+///
+/// 候補となる近傍は8個までという制限があるが高速
+pub struct SimdSelector {
+    prefix_sum: std::arch::x86_64::__m256,
+}
+
+impl SimdSelector {
+    #[target_feature(enable = "bmi1,avx")]
+    unsafe fn select_simd(&self, rng: &mut AnnealingRng) -> usize {
+        // SIMD命令を使用して、重みの中からランダムな値以上の最初のインデックスを選択する
+        // 8要素同時に比較してからtrue/falseのビットを取得し、tzcntで最初のtrueのインデックスを返す
+        let x = rng.gen::<f32>();
+        let x = std::arch::x86_64::_mm256_set1_ps(x);
+        let cmp =
+            std::arch::x86_64::_mm256_cmp_ps(self.prefix_sum, x, std::arch::x86_64::_CMP_GE_OQ);
+        let flag = std::arch::x86_64::_mm256_movemask_ps(cmp);
+        let index = std::arch::x86_64::_tzcnt_u32(flag as u32) as usize;
+        index
+    }
+}
+
+impl NeighborSelector for SimdSelector {
+    fn new(weights: Vec<f64>) -> Self {
+        assert!(weights.len() > 0, "Weights must not be empty");
+        assert!(
+            weights.len() <= 8,
+            "SimdSelector requires weights of length 8 or less"
+        );
+        assert!(
+            weights.iter().all(|&w| w >= 0.0),
+            "Weights must be non-negative"
+        );
+
+        let mut prefix_sum = [0.0; 8];
+        for i in 0..weights.len() {
+            prefix_sum[i] = weights[i] as f32;
+        }
+
+        for i in 1..prefix_sum.len() {
+            prefix_sum[i] += prefix_sum[i - 1];
+        }
+
+        let sum = prefix_sum[7];
+        assert!(sum > 0.0, "Weights must not all be zero");
+
+        for i in 0..prefix_sum.len() {
+            prefix_sum[i] /= sum; // 正規化
+        }
+
+        let prefix_sum = unsafe { std::arch::x86_64::_mm256_loadu_ps(prefix_sum.as_ptr()) };
+        Self { prefix_sum }
+    }
+
+    fn select(&self, rng: &mut AnnealingRng) -> usize {
+        unsafe { self.select_simd(rng) }
+    }
+}
+
+/// 焼きなましの統計データ
+#[derive(Debug, Clone)]
+pub struct AnnealingStatistics {
+    all_iter: usize,
+    valid_iter: usize,
+    accepted_count: usize,
+    updated_count: usize,
+    init_score: f64,
+    final_score: f64,
+    selected: Vec<u64>,
+    accepted: Vec<u64>,
+    neighbor_names: &'static [&'static str],
+}
+
+impl AnnealingStatistics {
+    fn new(init_score: f64, neighbor_names: &'static [&'static str]) -> Self {
+        Self {
+            all_iter: 0,
+            valid_iter: 0,
+            accepted_count: 0,
+            updated_count: 0,
+            init_score,
+            final_score: init_score,
+            selected: vec![0; neighbor_names.len()],
+            accepted: vec![0; neighbor_names.len()],
+            neighbor_names,
+        }
+    }
+
+    fn select(&mut self, neighbor_index: usize) {
+        self.valid_iter += 1;
+        self.selected[neighbor_index] += 1;
+    }
+
+    fn accept(&mut self, neighbor_index: usize) {
+        self.accepted_count += 1;
+        self.accepted[neighbor_index] += 1;
+    }
+}
+
+impl Display for AnnealingStatistics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "===== annealing =====")?;
+        writeln!(f, "init score : {}", self.init_score)?;
+        writeln!(f, "score      : {}", self.final_score)?;
+        writeln!(f, "all iter   : {}", self.all_iter)?;
+        writeln!(f, "valid iter : {}", self.valid_iter)?;
+        writeln!(f, "accepted   : {}", self.accepted_count)?;
+        writeln!(f, "updated    : {}", self.updated_count)?;
+
+        for (name, &selected, &accepted) in
+            izip!(self.neighbor_names, &self.selected, &self.accepted)
+        {
+            let percent = accepted as f64 / selected as f64 * 100.0;
+
+            writeln!(
+                f,
+                "{:11}: {} / {} ({:.2}%)",
+                name, accepted, selected, percent
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
+/// 焼きなましを実行する関数
+///
+/// `N` は近傍のセットを表すenumで、`NeighborEnum` トレイトを実装している必要がある。
+/// `I` は焼きなましの進捗を更新する間隔を指定する。例えば `I = 1024` とすると、1024回に1回の頻度で進捗を更新する。
+///
+/// # Usage
+///
+/// ```ignore
+/// neighbors! {
+///     Neighbors, Env, State, [
+///         TwoOpt => 1.0,
+///         Swap => 2.0,
+///         Insert => 0.5,
+///     ]
+/// }
+///
+/// let (state, stats) = run_annealing::<Neighbors, SimdSelector, 128>(&input, state, 1e1, 1e-1, Duration::from_millis(1000), 42);
+/// ```
+pub fn run_annealing<N: NeighborDelegator, S: NeighborSelector, const I: usize>(
+    env: &N::Env,
+    state: N::State,
+    start_temp: f64,
+    end_temp: f64,
+    duration: Duration,
+    seed: u128,
+) -> (N::State, AnnealingStatistics) {
+    let threshold_generator = ThresholdGenerator::get_singleton();
+    let mut threshold_generator = threshold_generator.borrow_mut();
+    let mut context =
+        AnnealingContext::new::<N>(env, state, &mut threshold_generator, start_temp, seed);
+    context.threshold_generator.set_pos(context.rng.gen());
+    let selector = S::new(N::get_neighbor_weights());
+
+    let since = Instant::now();
+    let duration_inv = 1.0 / duration.as_secs_f64();
+
+    loop {
+        if context.stats.all_iter % I == 0 {
+            context.progress = since.elapsed().as_secs_f64() * duration_inv;
+            context.temperature =
+                start_temp.powf(1.0 - context.progress) * end_temp.powf(context.progress);
+
+            if context.progress >= 1.0 {
+                break;
+            }
+        }
+
+        context.stats.all_iter += 1;
+        let neighbor_index = selector.select(&mut context.rng);
+        N::step(&mut context, neighbor_index);
+    }
+
+    context.stats.final_score = context.best_state.score(&env).raw_score();
+
+    (context.best_state, context.stats)
+}
+
+pub struct AnnealingContext<'a, E, S: State<Env = E>> {
+    pub env: &'a E,
+    pub state: S,
+    pub best_state: S,
+    pub current_score: S::Score,
+    pub best_score: f64,
+    pub stats: AnnealingStatistics,
+    pub progress: f64,
+    pub temperature: f64,
+    pub rng: AnnealingRng,
+    threshold_generator: &'a mut ThresholdGenerator,
+}
+
+impl<'a, E, S: State<Env = E>> AnnealingContext<'a, E, S> {
+    fn new<N: NeighborDelegator>(
+        env: &'a E,
+        state: S,
+        threshold_generator: &'a mut ThresholdGenerator,
+        temperature: f64,
+        seed: u128,
+    ) -> Self {
+        let best_state = state.clone();
+        let current_score = state.score(&env);
+        let best_score = current_score.annealing_score(1.0);
+        let stats = AnnealingStatistics::new(current_score.raw_score(), N::get_neighbor_names());
+        let progress = 0.0;
+        let rng = AnnealingRng::new(seed);
+
+        Self {
+            env,
+            state,
+            best_state,
+            current_score,
+            best_score,
+            stats,
+            progress,
+            temperature,
+            rng,
+            threshold_generator,
+        }
+    }
+
+    pub fn step<N: Neighbor<Env = E, State = S>>(
+        &mut self,
+        mut neighbor: N,
+        neighbor_index: usize,
+    ) {
+        self.stats.select(neighbor_index);
+        neighbor.preprocess(self.env, &mut self.state);
+
+        // スコア計算
+        let threshold = self.threshold_generator.next(
+            self.current_score.annealing_score(self.progress),
+            self.temperature,
+        );
+        let Some(new_score) = neighbor.eval(&self.env, &self.state, self.progress, threshold)
+        else {
+            // 明らかに閾値に届かない場合はreject
+            neighbor.rollback(self.env, &mut self.state);
+            return;
+        };
+
+        if new_score.annealing_score(self.progress) >= threshold {
+            self.stats.accept(neighbor_index);
+            self.current_score = new_score;
+            neighbor.postprocess(&self.env, &mut self.state);
+
+            let new_score = self.current_score.annealing_score(1.0);
+
+            if self.best_score < new_score {
+                self.best_score = new_score;
+                self.best_state = self.state.clone();
+                self.stats.updated_count += 1;
+            }
+        } else {
+            neighbor.rollback(self.env, &mut self.state);
+        }
+    }
+}
+
+/// 焼きなましにおける評価関数の打ち切り基準となる次の閾値を返す構造体
+///
+/// 参考: [焼きなまし法での評価関数の打ち切り](https://qiita.com/not522/items/cd20b87157d15850d31c)
+struct ThresholdGenerator {
+    iter: usize,
+    log_randoms: Vec<f64>,
+}
+
+impl ThresholdGenerator {
+    const LEN: usize = 1 << 16;
+    thread_local! {
+        static THRESHOLD_GENERATOR: Rc<RefCell<ThresholdGenerator>> = Rc::new(RefCell::new(ThresholdGenerator::new(42)));
+    }
+
+    fn new(seed: u128) -> Self {
+        let mut rng = Pcg64Mcg::new(seed);
+        let log_randoms = (0..Self::LEN)
+            .map(|_| rng.gen_range(0.0f64..1.0).ln())
+            .collect_vec();
+
+        Self {
+            iter: 0,
+            log_randoms,
+        }
+    }
+
+    /// 評価関数の打ち切り基準となる次の閾値を返す
+    fn next(&mut self, prev_score: f64, temperature: f64) -> f64 {
+        let threshold = prev_score + temperature * self.log_randoms[self.iter % Self::LEN];
+        self.iter += 1;
+        threshold
+    }
+
+    fn set_pos(&mut self, pos: usize) {
+        self.iter = pos % Self::LEN;
+    }
+
+    fn get_singleton() -> Rc<RefCell<Self>> {
+        Self::THRESHOLD_GENERATOR.with(|cell| cell.clone())
+    }
+}
