@@ -1,7 +1,7 @@
 use crate::{
     annealing::{self, run_annealing, SimdSelector, SingleScore},
     data_structures::IndexSet,
-    grid::{Coord, Map2d, ADJACENTS, D, L, R, U},
+    grid::{Coord, Map2d, D, L, R, U},
     problem::{Action, Input, Move, Output},
     random::RandExtension,
     solver::{naive, naive_fast},
@@ -160,25 +160,16 @@ impl State {
 impl State {
     fn to_output(&self, input: &Input) -> Output {
         let mut input = input.clone();
-        let mut actual_wall_v = input.init_walls_v.clone();
-        let mut actual_wall_h = input.init_walls_h.clone();
-
         input.init_walls_v = self.wall_v.clone();
         input.init_walls_h = self.wall_h.clone();
+        input.init_graph = build_graph(&input.init_walls_v, &input.init_walls_h);
 
         for action in &self.actions {
             match action {
-                Action::Group(mv) => {
-                    self.move_group(&mut input, mv, &mut actual_wall_v, &mut actual_wall_h)
-                }
-                Action::Robot(mv) => {
-                    self.move_robot(&mut input, mv, &mut actual_wall_v, &mut actual_wall_h)
-                }
+                Action::Group(mv) => self.move_group(&mut input, mv),
+                Action::Robot(mv) => self.move_robot(&mut input, mv),
             }
         }
-
-        input.init_walls_v = actual_wall_v;
-        input.init_walls_h = actual_wall_h;
 
         let mut output = naive::solve_greedy(&input, &self.perm);
 
@@ -187,19 +178,10 @@ impl State {
         output.actions = actions;
 
         output.groups = self.groups.clone();
-
-        eprintln!("Score: {}", output.score());
-
         output
     }
 
-    fn move_group(
-        &self,
-        input: &mut Input,
-        mv: &Move,
-        actual_wall_v: &mut Map2d<bool>,
-        actual_wall_h: &mut Map2d<bool>,
-    ) {
+    fn move_group(&self, input: &mut Input, mv: &Move) {
         let mut robots = (0..input.robot_count)
             .filter(|&i| self.groups[i] == mv.index)
             .collect::<Vec<_>>();
@@ -222,182 +204,26 @@ impl State {
 
         for &robot_id in &robots {
             let current_pos = input.init_robots[robot_id];
-            let next = current_pos + ADJACENTS[mv.direction];
 
-            if !next.in_map(Input::MAP_SIZE) || input.robot_maps[next].is_some() {
-                // 壁があろうがなかろうが移動不可
-                continue;
-            }
-
-            let init_wall = match mv.direction {
-                U => {
-                    let w = Coord::new(current_pos.row() - 1, current_pos.col());
-                    actual_wall_h[w]
+            if let Some(new_pos) = input.init_graph[current_pos][mv.direction] {
+                if input.robot_maps[new_pos].is_none() {
+                    input.robot_maps[current_pos] = None;
+                    input.robot_maps[new_pos] = Some(robot_id);
+                    input.init_robots[robot_id] = new_pos;
                 }
-                R => {
-                    let w = Coord::new(current_pos.row(), current_pos.col());
-                    actual_wall_v[w]
-                }
-                D => {
-                    let w = Coord::new(current_pos.row(), current_pos.col());
-                    actual_wall_h[w]
-                }
-                L => {
-                    let w = Coord::new(current_pos.row(), current_pos.col() - 1);
-                    actual_wall_v[w]
-                }
-                _ => unreachable!(),
-            };
-
-            if init_wall {
-                // 壁があるので移動不可
-                continue;
-            }
-
-            let wall = match mv.direction {
-                U => {
-                    let w = Coord::new(current_pos.row() - 1, current_pos.col());
-
-                    if input.init_walls_h[w] {
-                        Some(w)
-                    } else {
-                        None
-                    }
-                }
-                R => {
-                    let w = Coord::new(current_pos.row(), current_pos.col());
-
-                    if input.init_walls_v[w] {
-                        Some(w)
-                    } else {
-                        None
-                    }
-                }
-                D => {
-                    let w = Coord::new(current_pos.row(), current_pos.col());
-
-                    if input.init_walls_h[w] {
-                        Some(w)
-                    } else {
-                        None
-                    }
-                }
-                L => {
-                    let w = Coord::new(current_pos.row(), current_pos.col() - 1);
-
-                    if input.init_walls_v[w] {
-                        Some(w)
-                    } else {
-                        None
-                    }
-                }
-                _ => unreachable!(),
-            };
-
-            if let Some(wall) = wall {
-                if mv.direction == U || mv.direction == D {
-                    actual_wall_h[wall] = true;
-                } else {
-                    actual_wall_v[wall] = true;
-                }
-            } else {
-                input.robot_maps[current_pos] = None;
-                input.robot_maps[next] = Some(robot_id);
-                input.init_robots[robot_id] = next;
             }
         }
     }
 
-    fn move_robot(
-        &self,
-        input: &mut Input,
-        mv: &Move,
-        actual_wall_v: &mut Map2d<bool>,
-        actual_wall_h: &mut Map2d<bool>,
-    ) {
+    fn move_robot(&self, input: &mut Input, mv: &Move) {
         let current_pos = input.init_robots[mv.index];
-        let next = current_pos + ADJACENTS[mv.direction];
 
-        if !next.in_map(Input::MAP_SIZE) || input.robot_maps[next].is_some() {
-            // 壁があろうがなかろうが移動不可
-            return;
-        }
-
-        let init_wall = match mv.direction {
-            U => {
-                let w = Coord::new(current_pos.row() - 1, current_pos.col());
-                actual_wall_h[w]
+        if let Some(new_pos) = input.init_graph[current_pos][mv.direction] {
+            if input.robot_maps[new_pos].is_none() {
+                input.robot_maps[current_pos] = None;
+                input.robot_maps[new_pos] = Some(mv.index);
+                input.init_robots[mv.index] = new_pos;
             }
-            R => {
-                let w = Coord::new(current_pos.row(), current_pos.col());
-                actual_wall_v[w]
-            }
-            D => {
-                let w = Coord::new(current_pos.row(), current_pos.col());
-                actual_wall_h[w]
-            }
-            L => {
-                let w = Coord::new(current_pos.row(), current_pos.col() - 1);
-                actual_wall_v[w]
-            }
-            _ => unreachable!(),
-        };
-
-        if init_wall {
-            // 壁があるので移動不可
-            return;
-        }
-
-        let wall = match mv.direction {
-            U => {
-                let w = Coord::new(current_pos.row() - 1, current_pos.col());
-
-                if input.init_walls_h[w] {
-                    Some(w)
-                } else {
-                    None
-                }
-            }
-            R => {
-                let w = Coord::new(current_pos.row(), current_pos.col());
-
-                if input.init_walls_v[w] {
-                    Some(w)
-                } else {
-                    None
-                }
-            }
-            D => {
-                let w = Coord::new(current_pos.row(), current_pos.col());
-
-                if input.init_walls_h[w] {
-                    Some(w)
-                } else {
-                    None
-                }
-            }
-            L => {
-                let w = Coord::new(current_pos.row(), current_pos.col() - 1);
-
-                if input.init_walls_v[w] {
-                    Some(w)
-                } else {
-                    None
-                }
-            }
-            _ => unreachable!(),
-        };
-
-        if let Some(wall) = wall {
-            if mv.direction == U || mv.direction == D {
-                actual_wall_h[wall] = true;
-            } else {
-                actual_wall_v[wall] = true;
-            }
-        } else {
-            input.robot_maps[current_pos] = None;
-            input.robot_maps[next] = Some(mv.index);
-            input.init_robots[mv.index] = next;
         }
     }
 }
@@ -408,31 +234,62 @@ impl annealing::State for State {
 
     fn score(&self, env: &Self::Env) -> Self::Score {
         let mut input = env.input.clone();
-        let mut actual_wall_v = input.init_walls_v.clone();
-        let mut actual_wall_h = input.init_walls_h.clone();
-
         input.init_walls_v = self.wall_v.clone();
         input.init_walls_h = self.wall_h.clone();
+        input.init_graph = build_graph(&input.init_walls_v, &input.init_walls_h);
 
         for action in &self.actions {
             match action {
-                Action::Group(mv) => {
-                    self.move_group(&mut input, mv, &mut actual_wall_v, &mut actual_wall_h)
-                }
-                Action::Robot(mv) => {
-                    self.move_robot(&mut input, mv, &mut actual_wall_v, &mut actual_wall_h)
-                }
+                Action::Group(mv) => self.move_group(&mut input, mv),
+                Action::Robot(mv) => self.move_robot(&mut input, mv),
             }
         }
-
-        input.init_walls_v = actual_wall_v;
-        input.init_walls_h = actual_wall_h;
 
         let (action_cnt, remaining_dist) = naive_fast::solve_greedy(&input, &self.perm);
         let score = self.actions.len() as u32 + action_cnt + remaining_dist * 100;
 
         SingleScore(-(score as f64))
     }
+}
+
+fn build_graph(walls_v: &Map2d<bool>, walls_h: &Map2d<bool>) -> Map2d<[Option<Coord>; 4]> {
+    let mut graph = Map2d::from_fn(|_| [None; 4], Input::MAP_SIZE);
+
+    for row in 0..Input::MAP_SIZE {
+        for col in 0..Input::MAP_SIZE {
+            let c = Coord::new(row, col);
+            let directions = [
+                (
+                    U,
+                    (row.wrapping_sub(1), col),
+                    row > 0 && !walls_h[row - 1][col],
+                ),
+                (
+                    R,
+                    (row, col + 1),
+                    col < Input::MAP_SIZE - 1 && !walls_v[row][col],
+                ),
+                (
+                    D,
+                    (row + 1, col),
+                    row < Input::MAP_SIZE - 1 && !walls_h[row][col],
+                ),
+                (
+                    L,
+                    (row, col.wrapping_sub(1)),
+                    col > 0 && !walls_v[row][col - 1],
+                ),
+            ];
+
+            for (dir, (new_row, new_col), can_move) in directions {
+                if can_move && new_row < Input::MAP_SIZE && new_col < Input::MAP_SIZE {
+                    graph[c][dir] = Some(Coord::new(new_row, new_col));
+                }
+            }
+        }
+    }
+
+    graph
 }
 
 struct AddActionNeigh {
@@ -450,7 +307,6 @@ impl annealing::Neighbor for AddActionNeigh {
         rng: &mut annealing::AnnealingRng,
         _progress: f64,
     ) -> Option<Self> {
-        // TODO: Action::Robotを追加する
         if rng.gen_bool(0.5) {
             let (index, group_id, dir) =
                 rng.fast_gen_range_u16x3(0..=state.actions.len(), 0..env.max_group, 0..4);
@@ -621,7 +477,7 @@ impl annealing::Neighbor for ToggleWall {
         rng: &mut annealing::AnnealingRng,
         _progress: f64,
     ) -> Option<Self> {
-        if rng.gen_bool(0.5) {
+        if rng.gen_bool(0.1) {
             // 壁追加
             if rng.gen_bool(0.5) {
                 let slice = state.unused_walls_v.as_slice();
