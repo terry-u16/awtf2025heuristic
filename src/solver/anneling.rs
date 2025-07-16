@@ -9,29 +9,9 @@ use crate::{
 use rand::Rng;
 use std::{cmp::Reverse, time::Duration};
 
-pub(super) fn solve(input: &Input) -> Output {
-    let env = Env::new(input.clone(), 5);
-    let groups = (0..input.robot_count)
-        .map(|i| {
-            let dr = input.destinations[i].row() as i32 - input.init_robots[i].row() as i32;
-            let dc = input.destinations[i].col() as i32 - input.init_robots[i].col() as i32;
-
-            if dr.abs() > dc.abs() {
-                if dr > 0 {
-                    D
-                } else {
-                    U
-                }
-            } else {
-                if dc > 0 {
-                    R
-                } else {
-                    L
-                }
-            }
-        })
-        .collect();
-    let state = State::new(&env, (0..input.robot_count).collect(), groups);
+pub(super) fn solve(input: &Input, clusters: Vec<Vec<usize>>) -> Output {
+    let env = Env::new(input.clone(), clusters.len());
+    let state = State::new(&env, (0..input.robot_count).collect(), clusters);
     let (state, stats) = run_annealing::<Neighbors, SimdSelector, 1>(
         &env,
         state,
@@ -101,7 +81,7 @@ struct State {
 }
 
 impl State {
-    fn new(env: &Env, perm: Vec<usize>, groups: Vec<usize>) -> Self {
+    fn new(env: &Env, perm: Vec<usize>, clusters: Vec<Vec<usize>>) -> Self {
         let mut unused_walls_v = IndexSet::new(env.wall_candidates_v.len());
         let mut unused_walls_h = IndexSet::new(env.wall_candidates_h.len());
         let used_walls_v = IndexSet::new(env.wall_candidates_v.len());
@@ -115,12 +95,58 @@ impl State {
             unused_walls_h.add(i);
         }
 
+        let mut group_actions = vec![];
+        let mut groups = vec![0; env.input.robot_count];
+
+        for (i, cluster) in clusters.iter().enumerate() {
+            let mut dr = 0.0;
+            let mut dc = 0.0;
+
+            for robot in cluster.iter() {
+                let from = env.input.init_robots[*robot];
+                let to = env.input.destinations[*robot];
+                dr += to.row() as f64 - from.row() as f64;
+                dc += to.col() as f64 - from.col() as f64;
+            }
+
+            let dr_avg = dr / cluster.len() as f64;
+            let dc_avg = dc / cluster.len() as f64;
+
+            if dr_avg > 0.0 {
+                for _ in 0..dr_avg as usize {
+                    group_actions.push(Move::new(i, D));
+                }
+            }
+
+            if dr_avg < 0.0 {
+                for _ in 0..(-dr_avg) as usize {
+                    group_actions.push(Move::new(i, U));
+                }
+            }
+
+            if dc_avg > 0.0 {
+                for _ in 0..dc_avg as usize {
+                    group_actions.push(Move::new(i, R));
+                }
+            }
+
+            if dc_avg < 0.0 {
+                for _ in 0..(-dc_avg) as usize {
+                    group_actions.push(Move::new(i, L));
+                }
+            }
+
+            for robot in cluster.iter() {
+                groups[*robot] = i;
+            }
+        }
+
         Self {
             perm,
             wall_v: env.input.init_walls_v.clone(),
             wall_h: env.input.init_walls_h.clone(),
             groups,
-            group_actions: vec![],
+            group_actions,
             unused_walls_v: unused_walls_v,
             unused_walls_h: unused_walls_h,
             used_walls_v: used_walls_v,

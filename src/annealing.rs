@@ -295,15 +295,15 @@ impl NeighborSelector for SimdSelector {
 /// 焼きなましの統計データ
 #[derive(Debug, Clone)]
 pub struct AnnealingStatistics {
-    all_iter: usize,
-    valid_iter: usize,
-    accepted_count: usize,
-    updated_count: usize,
-    init_score: f64,
-    final_score: f64,
-    selected: Vec<u64>,
-    accepted: Vec<u64>,
-    neighbor_names: &'static [&'static str],
+    pub all_iter: usize,
+    pub valid_iter: usize,
+    pub accepted_count: usize,
+    pub updated_count: usize,
+    pub init_score: f64,
+    pub final_score: f64,
+    pub selected: Vec<u64>,
+    pub accepted: Vec<u64>,
+    pub neighbor_names: &'static [&'static str],
 }
 
 impl AnnealingStatistics {
