@@ -47,31 +47,54 @@ pub fn solve_greedy(input: &Input, robot_order: &[usize]) -> Output {
 
     // 現在のロボット位置
     let mut current_positions = input.init_robots.clone();
+    let mut current_map = Map2d::with_default(Input::MAP_SIZE);
+
+    for c in current_positions.iter() {
+        current_map[*c] = true;
+    }
+
     let mut actions = Vec::new();
 
     // 各ロボットを順番に移動
-    for &robot_id in robot_order {
-        let path = find_path(
-            current_positions[robot_id],
-            input.destinations[robot_id],
-            &graph,
-            &current_positions,
-            robot_id,
-        );
+    while current_positions
+        .iter()
+        .zip(input.destinations.iter())
+        .any(|(pos, dest)| pos != dest)
+    {
+        let mut found = false;
 
-        // パスに沿って移動
-        for direction in path {
-            let new_pos = move_robot(current_positions[robot_id], direction, &graph);
-            if let Some(new_pos) = new_pos {
-                // 移動先に他のロボットがいるかチェック
-                if !current_positions.iter().any(|&pos| pos == new_pos) {
-                    current_positions[robot_id] = new_pos;
+        for &robot_id in robot_order {
+            if current_positions[robot_id] == input.destinations[robot_id] {
+                continue; // 目的地に到達しているロボットはスキップ
+            }
+
+            let path = find_path(
+                current_positions[robot_id],
+                input.destinations[robot_id],
+                &graph,
+                &current_map,
+                robot_id,
+            );
+
+            if let Some(path) = path {
+                found = true;
+                current_map[current_positions[robot_id]] = false; // 現在位置を空にする
+                current_positions[robot_id] = input.destinations[robot_id]; // 目的地に移動
+                current_map[current_positions[robot_id]] = true; // 新しい位置を占有
+
+                for dir in path.iter() {
+                    // アクションを追加
                     actions.push(Action::Robot(Move {
                         index: robot_id,
-                        direction,
+                        direction: *dir,
                     }));
                 }
             }
+        }
+
+        if !found {
+            // どのロボットも移動できなかった場合、終了
+            break;
         }
     }
 
@@ -137,12 +160,16 @@ fn find_path(
     start: Coord,
     goal: Coord,
     graph: &Map2d<[Option<Coord>; 4]>,
-    current_positions: &[Coord],
+    current_map: &Map2d<bool>,
     robot_id: usize,
-) -> Vec<usize> {
+) -> Option<Vec<usize>> {
+    if current_map[goal] {
+        return None;
+    }
+
     let mut queue = VecDeque::new();
     let mut visited = Map2d::with_default(Input::MAP_SIZE);
-    let mut parent = Map2d::from_fn(|_| None, Input::MAP_SIZE);
+    let mut parent = Map2d::with_default(Input::MAP_SIZE);
 
     queue.push_back(start);
     visited[start] = true;
@@ -155,34 +182,31 @@ fn find_path(
         let current_coord = current;
         for direction in 0..4 {
             if let Some(next_pos) = graph[current_coord][direction] {
-                if !visited[next_pos] {
-                    // 他のロボットがいる場所は通れない
-                    let occupied = current_positions
-                        .iter()
-                        .enumerate()
-                        .any(|(id, &pos)| id != robot_id && pos == next_pos);
-
-                    if !occupied {
-                        visited[next_pos] = true;
-                        parent[next_pos] = Some((current, direction));
-                        queue.push_back(next_pos);
-                    }
+                if !visited[next_pos] && !current_map[next_pos] {
+                    visited[next_pos] = true;
+                    parent[next_pos] = (current, direction);
+                    queue.push_back(next_pos);
                 }
             }
         }
+    }
+
+    if !visited[goal] {
+        return None; // Goal not reachable
     }
 
     // パスを復元
     let mut path = Vec::new();
     let mut current = goal;
 
-    while let Some((prev_pos, direction)) = parent[current] {
+    while current != start {
+        let (prev_pos, direction) = parent[current];
         path.push(direction);
         current = prev_pos;
     }
 
     path.reverse();
-    path
+    Some(path)
 }
 
 fn move_robot(pos: Coord, direction: usize, graph: &Map2d<[Option<Coord>; 4]>) -> Option<Coord> {
