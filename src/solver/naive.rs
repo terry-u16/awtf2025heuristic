@@ -1,8 +1,6 @@
 use crate::grid::{Coord, Map2d, D, L, R, U};
 use crate::problem::{Action, Input, Move, Output};
-use rand::prelude::*;
 use std::collections::VecDeque;
-use std::time::Instant;
 
 pub fn solve_greedy(input: &Input, robot_order: &[usize]) -> Output {
     // 壁は追加しない
@@ -40,7 +38,6 @@ pub fn solve_greedy(input: &Input, robot_order: &[usize]) -> Output {
                 input.destinations[robot_id],
                 &graph,
                 &current_map,
-                robot_id,
             );
 
             if let Some(path) = path {
@@ -128,7 +125,6 @@ fn find_path(
     goal: Coord,
     graph: &Map2d<[Option<Coord>; 4]>,
     current_map: &Map2d<bool>,
-    robot_id: usize,
 ) -> Option<Vec<usize>> {
     if current_map[goal] {
         return None;
@@ -174,8 +170,4 @@ fn find_path(
 
     path.reverse();
     Some(path)
-}
-
-fn move_robot(pos: Coord, direction: usize, graph: &Map2d<[Option<Coord>; 4]>) -> Option<Coord> {
-    graph[pos][direction]
 }
