@@ -3,11 +3,11 @@ mod annealing;
 #[allow(dead_code)]
 mod grid;
 mod problem;
+#[allow(dead_code)]
+mod random;
 mod solver;
 #[allow(dead_code)]
 mod util;
-#[allow(dead_code)]
-mod random;
 
 fn main() {
     let input = problem::Input::read();

@@ -1,8 +1,3 @@
-use std::{cmp::Reverse, time::Duration};
-
-use rand::{seq::SliceRandom as _, SeedableRng};
-use rand_pcg::Pcg64Mcg;
-
 use crate::{
     annealing::{self, run_annealing, SimdSelector, SingleScore},
     grid::{Coord, Map2d, D, L, R, U},
@@ -10,13 +5,13 @@ use crate::{
     random::RandExtension,
     solver::naive,
 };
+use std::{cmp::Reverse, time::Duration};
 
 pub(super) fn solve(input: &Input) -> Output {
-    let perm = find_perm(input);
     let env = Env::new(input.clone(), 10);
     let state = State::new(
-        perm,
         input,
+        (0..input.robot_count).collect(),
         (0..input.robot_count).map(|i| i % 10).collect(),
     );
     let (state, stats) = run_annealing::<Neighbors, SimdSelector, 1>(
@@ -24,7 +19,7 @@ pub(super) fn solve(input: &Input) -> Output {
         state,
         1e0,
         1e-1,
-        Duration::from_millis(1000),
+        Duration::from_millis(1900).saturating_sub(input.since.elapsed()),
         42,
     );
 
@@ -41,20 +36,8 @@ neighbors! {
         AddActionNeigh => 1.0,
         RemoveActionNeigh => 1.0,
         ChangeGroupNeigh => 1.0,
+        SwapPermNeigh => 1.0,
     ]
-}
-
-fn find_perm(input: &Input) -> Vec<usize> {
-    let mut rng = Pcg64Mcg::from_entropy();
-
-    loop {
-        let mut perm = (0..input.robot_count).collect::<Vec<_>>();
-        perm.shuffle(&mut rng);
-
-        if naive::solve(input).remaining_dist == 0 {
-            return perm;
-        }
-    }
 }
 
 struct Env {
@@ -78,7 +61,7 @@ struct State {
 }
 
 impl State {
-    fn new(perm: Vec<usize>, input: &Input, groups: Vec<usize>) -> Self {
+    fn new(input: &Input, perm: Vec<usize>, groups: Vec<usize>) -> Self {
         Self {
             perm,
             wall_v: input.init_walls_v.clone(),
@@ -324,5 +307,48 @@ impl annealing::Neighbor for ChangeGroupNeigh {
 
     fn rollback(self, _env: &Self::Env, state: &mut Self::State) {
         state.groups[self.index] = self.old_group;
+    }
+}
+
+struct SwapPermNeigh {
+    index0: usize,
+    index1: usize,
+}
+
+impl annealing::Neighbor for SwapPermNeigh {
+    type Env = Env;
+    type State = State;
+
+    fn generate(
+        _env: &Self::Env,
+        state: &Self::State,
+        rng: &mut annealing::AnnealingRng,
+        _progress: f64,
+    ) -> Option<Self> {
+        loop {
+            let (index0, index1) =
+                rng.fast_gen_range_u16x2(0..state.perm.len(), 0..state.perm.len());
+
+            if index0 == index1 {
+                continue;
+            }
+
+            return Some(Self {
+                index0: index0 as usize,
+                index1: index1 as usize,
+            });
+        }
+    }
+
+    fn preprocess(&mut self, _env: &Self::Env, state: &mut Self::State) {
+        state.perm.swap(self.index0, self.index1);
+    }
+
+    fn postprocess(self, _env: &Self::Env, _state: &mut Self::State) {
+        // do nothing
+    }
+
+    fn rollback(self, _env: &Self::Env, state: &mut Self::State) {
+        state.perm.swap(self.index0, self.index1);
     }
 }
