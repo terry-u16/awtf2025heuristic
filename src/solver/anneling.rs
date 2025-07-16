@@ -8,11 +8,11 @@ use crate::{
 use std::{cmp::Reverse, time::Duration};
 
 pub(super) fn solve(input: &Input) -> Output {
-    let env = Env::new(input.clone(), 10);
+    let env = Env::new(input.clone(), 5);
     let state = State::new(
         input,
         (0..input.robot_count).collect(),
-        (0..input.robot_count).map(|i| i % 10).collect(),
+        (0..input.robot_count).map(|i| i % env.max_group).collect(),
     );
     let (state, stats) = run_annealing::<Neighbors, SimdSelector, 1>(
         &env,
@@ -38,6 +38,7 @@ neighbors! {
         ChangeGroupNeigh => 1.0,
         SwapPermNeigh => 1.0,
         ToggleWall => 0.0,
+        SwapActionOrderNeigh => 1.0,
     ]
 }
 
@@ -414,5 +415,52 @@ impl annealing::Neighbor for ToggleWall {
         } else {
             state.wall_h[self.coord] ^= true;
         }
+    }
+}
+
+struct SwapActionOrderNeigh {
+    index0: usize,
+    index1: usize,
+}
+
+impl annealing::Neighbor for SwapActionOrderNeigh {
+    type Env = Env;
+    type State = State;
+
+    fn generate(
+        _env: &Self::Env,
+        state: &Self::State,
+        rng: &mut annealing::AnnealingRng,
+        _progress: f64,
+    ) -> Option<Self> {
+        if state.group_actions.len() < 2 {
+            return None;
+        }
+
+        loop {
+            let (index0, index1) = rng
+                .fast_gen_range_u16x2(0..state.group_actions.len(), 0..state.group_actions.len());
+
+            if index0 == index1 {
+                continue;
+            }
+
+            return Some(Self {
+                index0: index0 as usize,
+                index1: index1 as usize,
+            });
+        }
+    }
+
+    fn preprocess(&mut self, _env: &Self::Env, state: &mut Self::State) {
+        state.group_actions.swap(self.index0, self.index1);
+    }
+
+    fn postprocess(self, _env: &Self::Env, _state: &mut Self::State) {
+        // do nothing
+    }
+
+    fn rollback(self, _env: &Self::Env, state: &mut Self::State) {
+        state.group_actions.swap(self.index0, self.index1);
     }
 }
