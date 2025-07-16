@@ -1,6 +1,8 @@
 #[allow(dead_code)]
 mod annealing;
 #[allow(dead_code)]
+mod data_structures;
+#[allow(dead_code)]
 mod grid;
 mod problem;
 #[allow(dead_code)]

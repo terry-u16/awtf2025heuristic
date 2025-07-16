@@ -1,10 +1,12 @@
 use crate::{
     annealing::{self, run_annealing, SimdSelector, SingleScore},
+    data_structures::IndexSet,
     grid::{Coord, Map2d, D, L, R, U},
     problem::{Action, Input, Move, Output},
     random::RandExtension,
     solver::naive,
 };
+use rand::Rng;
 use std::{cmp::Reverse, time::Duration};
 
 pub(super) fn solve(input: &Input) -> Output {
@@ -29,7 +31,7 @@ pub(super) fn solve(input: &Input) -> Output {
             }
         })
         .collect();
-    let state = State::new(input, (0..input.robot_count).collect(), groups);
+    let state = State::new(&env, (0..input.robot_count).collect(), groups);
     let (state, stats) = run_annealing::<Neighbors, SimdSelector, 1>(
         &env,
         state,
@@ -61,11 +63,27 @@ neighbors! {
 struct Env {
     input: Input,
     max_group: usize,
+    wall_candidates_v: Vec<Coord>,
+    wall_candidates_h: Vec<Coord>,
 }
 
 impl Env {
     fn new(input: Input, max_group: usize) -> Self {
-        Self { input, max_group }
+        let wall_candidates_v = (0..Input::MAP_SIZE)
+            .flat_map(|row| (0..Input::MAP_SIZE - 1).map(move |col| Coord::new(row, col)))
+            .filter(|c| !input.init_walls_v[c])
+            .collect();
+        let wall_candidates_h = (0..Input::MAP_SIZE - 1)
+            .flat_map(|row| (0..Input::MAP_SIZE).map(move |col| Coord::new(row, col)))
+            .filter(|c| !input.init_walls_h[c])
+            .collect();
+
+        Self {
+            input,
+            max_group,
+            wall_candidates_v,
+            wall_candidates_h,
+        }
     }
 }
 
@@ -76,16 +94,37 @@ struct State {
     wall_h: Map2d<bool>,
     groups: Vec<usize>,
     group_actions: Vec<Move>,
+    unused_walls_v: IndexSet,
+    unused_walls_h: IndexSet,
+    used_walls_v: IndexSet,
+    used_walls_h: IndexSet,
 }
 
 impl State {
-    fn new(input: &Input, perm: Vec<usize>, groups: Vec<usize>) -> Self {
+    fn new(env: &Env, perm: Vec<usize>, groups: Vec<usize>) -> Self {
+        let mut unused_walls_v = IndexSet::new(env.wall_candidates_v.len());
+        let mut unused_walls_h = IndexSet::new(env.wall_candidates_h.len());
+        let used_walls_v = IndexSet::new(env.wall_candidates_v.len());
+        let used_walls_h = IndexSet::new(env.wall_candidates_h.len());
+
+        for i in 0..env.wall_candidates_v.len() {
+            unused_walls_v.add(i);
+        }
+
+        for i in 0..env.wall_candidates_h.len() {
+            unused_walls_h.add(i);
+        }
+
         Self {
             perm,
-            wall_v: input.init_walls_v.clone(),
-            wall_h: input.init_walls_h.clone(),
+            wall_v: env.input.init_walls_v.clone(),
+            wall_h: env.input.init_walls_h.clone(),
             groups,
             group_actions: vec![],
+            unused_walls_v: unused_walls_v,
+            unused_walls_h: unused_walls_h,
+            used_walls_v: used_walls_v,
+            used_walls_h: used_walls_h,
         }
     }
 }
@@ -372,8 +411,8 @@ impl annealing::Neighbor for SwapPermNeigh {
 }
 
 struct ToggleWall {
-    coord: Coord,
     is_vertical: bool,
+    coord_index: usize,
 }
 
 impl annealing::Neighbor for ToggleWall {
@@ -386,50 +425,96 @@ impl annealing::Neighbor for ToggleWall {
         rng: &mut annealing::AnnealingRng,
         _progress: f64,
     ) -> Option<Self> {
-        loop {
-            if rng.fast_gen_range_u16x1(0..2) == 1 {
-                let (row, col) =
-                    rng.fast_gen_range_u16x2(0..Input::MAP_SIZE, 0..Input::MAP_SIZE - 1);
-                let c = Coord::new(row, col);
+        if rng.gen_bool(0.1) {
+            // 壁追加
+            if rng.gen_bool(0.5) {
+                let slice = state.unused_walls_v.as_slice();
 
-                if !state.wall_v[c] {
-                    return Some(Self {
-                        coord: c,
-                        is_vertical: true,
-                    });
+                if slice.is_empty() {
+                    return None;
                 }
+
+                let index = rng.fast_gen_range_u16x1(0..slice.len());
+                return Some(Self {
+                    is_vertical: true,
+                    coord_index: index,
+                });
             } else {
-                let (row, col) =
-                    rng.fast_gen_range_u16x2(0..Input::MAP_SIZE - 1, 0..Input::MAP_SIZE);
-                let c = Coord::new(row, col);
+                let slice = state.unused_walls_h.as_slice();
 
-                if !state.wall_h[c] {
-                    return Some(Self {
-                        coord: c,
-                        is_vertical: false,
-                    });
+                if slice.is_empty() {
+                    return None;
                 }
+
+                let index = rng.fast_gen_range_u16x1(0..slice.len());
+                return Some(Self {
+                    coord_index: index,
+                    is_vertical: false,
+                });
+            }
+        } else {
+            // 壁削除
+            if rng.gen_bool(0.5) {
+                let slice = state.used_walls_v.as_slice();
+
+                if slice.is_empty() {
+                    return None;
+                }
+
+                let index = rng.fast_gen_range_u16x1(0..slice.len());
+                return Some(Self {
+                    coord_index: index,
+                    is_vertical: true,
+                });
+            } else {
+                let slice = state.used_walls_h.as_slice();
+
+                if slice.is_empty() {
+                    return None;
+                }
+
+                let index = rng.fast_gen_range_u16x1(0..slice.len());
+                return Some(Self {
+                    coord_index: index,
+                    is_vertical: false,
+                });
             }
         }
     }
 
-    fn preprocess(&mut self, _env: &Self::Env, state: &mut Self::State) {
+    fn preprocess(&mut self, env: &Self::Env, state: &mut Self::State) {
         if self.is_vertical {
-            state.wall_v[self.coord] ^= true;
+            state.wall_v[env.wall_candidates_v[self.coord_index]] ^= true;
         } else {
-            state.wall_h[self.coord] ^= true;
+            state.wall_h[env.wall_candidates_h[self.coord_index]] ^= true;
         }
     }
 
-    fn postprocess(self, _env: &Self::Env, _state: &mut Self::State) {
-        // do nothing
+    fn postprocess(self, _env: &Self::Env, state: &mut Self::State) {
+        if self.is_vertical {
+            if state.unused_walls_v.contains(self.coord_index) {
+                state.unused_walls_v.remove(self.coord_index);
+                state.used_walls_v.add(self.coord_index);
+            } else {
+                state.used_walls_v.remove(self.coord_index);
+                state.unused_walls_v.add(self.coord_index);
+            }
+        } else {
+            if state.unused_walls_h.contains(self.coord_index) {
+                state.unused_walls_h.remove(self.coord_index);
+                state.used_walls_h.add(self.coord_index);
+            } else {
+                state.used_walls_h.remove(self.coord_index);
+                state.unused_walls_h.add(self.coord_index);
+            }
+        }
     }
 
-    fn rollback(self, _env: &Self::Env, state: &mut Self::State) {
+    fn rollback(self, env: &Self::Env, state: &mut Self::State) {
         if self.is_vertical {
-            state.wall_v[self.coord] ^= true;
+            state.wall_v[env.wall_candidates_v[self.coord_index]] ^= true;
         } else {
-            state.wall_h[self.coord] ^= true;
+            state.wall_h[env.wall_candidates_h[self.coord_index]] ^= true;
         }
     }
 }
