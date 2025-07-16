@@ -204,6 +204,7 @@ impl Output {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum Action {
     /// グループ全体を動かす
     Group(Move),

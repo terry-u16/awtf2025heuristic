@@ -73,7 +73,7 @@ struct State {
     wall_v: Map2d<bool>,
     wall_h: Map2d<bool>,
     groups: Vec<usize>,
-    group_actions: Vec<Move>,
+    actions: Vec<Action>,
     unused_walls_v: IndexSet,
     unused_walls_h: IndexSet,
     used_walls_v: IndexSet,
@@ -114,25 +114,25 @@ impl State {
 
             if dr_avg > 0.0 {
                 for _ in 0..dr_avg as usize {
-                    group_actions.push(Move::new(i, D));
+                    group_actions.push(Action::Group(Move::new(i, D)));
                 }
             }
 
             if dr_avg < 0.0 {
                 for _ in 0..(-dr_avg) as usize {
-                    group_actions.push(Move::new(i, U));
+                    group_actions.push(Action::Group(Move::new(i, U)));
                 }
             }
 
             if dc_avg > 0.0 {
                 for _ in 0..dc_avg as usize {
-                    group_actions.push(Move::new(i, R));
+                    group_actions.push(Action::Group(Move::new(i, R)));
                 }
             }
 
             if dc_avg < 0.0 {
                 for _ in 0..(-dc_avg) as usize {
-                    group_actions.push(Move::new(i, L));
+                    group_actions.push(Action::Group(Move::new(i, L)));
                 }
             }
 
@@ -148,7 +148,7 @@ impl State {
             wall_v: env.input.init_walls_v.clone(),
             wall_h: env.input.init_walls_h.clone(),
             groups,
-            group_actions,
+            actions: group_actions,
             unused_walls_v: unused_walls_v,
             unused_walls_h: unused_walls_h,
             used_walls_v: used_walls_v,
@@ -164,17 +164,16 @@ impl State {
         input.init_walls_h = self.wall_h.clone();
         input.init_graph = build_graph(&input.init_walls_v, &input.init_walls_h);
 
-        for mv in &self.group_actions {
-            self.move_group(&mut input, mv);
+        for action in &self.actions {
+            match action {
+                Action::Group(mv) => self.move_group(&mut input, mv),
+                Action::Robot(mv) => self.move_robot(&mut input, mv),
+            }
         }
 
         let mut output = naive::solve_greedy(&input, &self.perm);
 
-        let mut actions = self
-            .group_actions
-            .iter()
-            .map(|&mv| Action::Group(mv))
-            .collect::<Vec<_>>();
+        let mut actions = self.actions.clone();
         actions.extend(output.actions);
         output.actions = actions;
 
@@ -215,6 +214,18 @@ impl State {
             }
         }
     }
+
+    fn move_robot(&self, input: &mut Input, mv: &Move) {
+        let current_pos = input.init_robots[mv.index];
+
+        if let Some(new_pos) = input.init_graph[current_pos][mv.direction] {
+            if input.robot_maps[new_pos].is_none() {
+                input.robot_maps[current_pos] = None;
+                input.robot_maps[new_pos] = Some(mv.index);
+                input.init_robots[mv.index] = new_pos;
+            }
+        }
+    }
 }
 
 impl annealing::State for State {
@@ -227,12 +238,14 @@ impl annealing::State for State {
         input.init_walls_h = self.wall_h.clone();
         input.init_graph = build_graph(&input.init_walls_v, &input.init_walls_h);
 
-        for mv in &self.group_actions {
-            self.move_group(&mut input, mv);
+        for action in &self.actions {
+            match action {
+                Action::Group(mv) => self.move_group(&mut input, mv),
+                Action::Robot(mv) => self.move_robot(&mut input, mv),
+            }
         }
 
-        let score =
-            naive::solve_greedy(&input, &self.perm).score() + self.group_actions.len() as u32;
+        let score = naive::solve_greedy(&input, &self.perm).score() + self.actions.len() as u32;
 
         SingleScore(-(score as f64))
     }
@@ -280,7 +293,7 @@ fn build_graph(walls_v: &Map2d<bool>, walls_h: &Map2d<bool>) -> Map2d<[Option<Co
 
 struct AddActionNeigh {
     index: usize,
-    mv: Move,
+    action: Action,
 }
 
 impl annealing::Neighbor for AddActionNeigh {
@@ -293,15 +306,25 @@ impl annealing::Neighbor for AddActionNeigh {
         rng: &mut annealing::AnnealingRng,
         _progress: f64,
     ) -> Option<Self> {
-        let (index, group_id, dir) =
-            rng.fast_gen_range_u16x3(0..=state.group_actions.len(), 0..env.max_group, 0..4);
-        let mv = Move::new(group_id, dir);
+        if rng.gen_bool(0.5) {
+            let (index, group_id, dir) =
+                rng.fast_gen_range_u16x3(0..=state.actions.len(), 0..env.max_group, 0..4);
+            let mv = Move::new(group_id, dir);
+            let action = Action::Group(mv);
 
-        Some(Self { index, mv })
+            Some(Self { index, action })
+        } else {
+            let (index, robot_id, dir) =
+                rng.fast_gen_range_u16x3(0..=state.actions.len(), 0..env.input.robot_count, 0..4);
+            let mv = Move::new(robot_id, dir);
+            let action = Action::Robot(mv);
+
+            Some(Self { index, action })
+        }
     }
 
     fn preprocess(&mut self, _env: &Self::Env, state: &mut Self::State) {
-        state.group_actions.insert(self.index, self.mv);
+        state.actions.insert(self.index, self.action);
     }
 
     fn postprocess(self, _env: &Self::Env, _state: &mut Self::State) {
@@ -309,13 +332,13 @@ impl annealing::Neighbor for AddActionNeigh {
     }
 
     fn rollback(self, _env: &Self::Env, state: &mut Self::State) {
-        state.group_actions.remove(self.index);
+        state.actions.remove(self.index);
     }
 }
 
 struct RemoveActionNeigh {
     index: usize,
-    mv: Move,
+    action: Action,
 }
 
 impl annealing::Neighbor for RemoveActionNeigh {
@@ -328,17 +351,17 @@ impl annealing::Neighbor for RemoveActionNeigh {
         rng: &mut annealing::AnnealingRng,
         _progress: f64,
     ) -> Option<Self> {
-        if state.group_actions.is_empty() {
+        if state.actions.is_empty() {
             return None;
         }
 
-        let index = rng.fast_gen_range_u16x1(0..state.group_actions.len());
-        let mv = state.group_actions[index];
-        Some(Self { index, mv })
+        let index = rng.fast_gen_range_u16x1(0..state.actions.len());
+        let action = state.actions[index];
+        Some(Self { index, action })
     }
 
     fn preprocess(&mut self, _env: &Self::Env, state: &mut Self::State) {
-        state.group_actions.remove(self.index);
+        state.actions.remove(self.index);
     }
 
     fn postprocess(self, _env: &Self::Env, _state: &mut Self::State) {
@@ -346,7 +369,7 @@ impl annealing::Neighbor for RemoveActionNeigh {
     }
 
     fn rollback(self, _env: &Self::Env, state: &mut Self::State) {
-        state.group_actions.insert(self.index, self.mv);
+        state.actions.insert(self.index, self.action);
     }
 }
 
@@ -562,13 +585,13 @@ impl annealing::Neighbor for SwapActionOrderNeigh {
         rng: &mut annealing::AnnealingRng,
         _progress: f64,
     ) -> Option<Self> {
-        if state.group_actions.len() < 2 {
+        if state.actions.len() < 2 {
             return None;
         }
 
         loop {
-            let (index0, index1) = rng
-                .fast_gen_range_u16x2(0..state.group_actions.len(), 0..state.group_actions.len());
+            let (index0, index1) =
+                rng.fast_gen_range_u16x2(0..state.actions.len(), 0..state.actions.len());
 
             if index0 == index1 {
                 continue;
@@ -582,7 +605,7 @@ impl annealing::Neighbor for SwapActionOrderNeigh {
     }
 
     fn preprocess(&mut self, _env: &Self::Env, state: &mut Self::State) {
-        state.group_actions.swap(self.index0, self.index1);
+        state.actions.swap(self.index0, self.index1);
     }
 
     fn postprocess(self, _env: &Self::Env, _state: &mut Self::State) {
@@ -590,6 +613,6 @@ impl annealing::Neighbor for SwapActionOrderNeigh {
     }
 
     fn rollback(self, _env: &Self::Env, state: &mut Self::State) {
-        state.group_actions.swap(self.index0, self.index1);
+        state.actions.swap(self.index0, self.index1);
     }
 }
