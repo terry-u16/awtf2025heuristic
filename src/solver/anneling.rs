@@ -35,7 +35,7 @@ neighbors! {
         RemoveActionNeigh => 1.0,
         ChangeGroupNeigh => 1.0,
         SwapPermNeigh => 1.0,
-        ToggleWall => 0.0,
+        ToggleWall => 1.0,
         SwapActionOrderNeigh => 1.0,
     ]
 }
