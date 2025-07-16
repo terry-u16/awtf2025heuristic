@@ -6,7 +6,7 @@ use crate::{
     random::RandExtension,
     solver::naive,
 };
-use rand::Rng;
+use rand::{seq::SliceRandom, Rng};
 use std::{cmp::Reverse, time::Duration};
 
 pub(super) fn solve(input: &Input, clusters: Vec<Vec<usize>>) -> Output {
@@ -140,6 +140,8 @@ impl State {
                 groups[*robot] = i;
             }
         }
+
+        group_actions.shuffle(&mut rand::thread_rng());
 
         Self {
             perm,
