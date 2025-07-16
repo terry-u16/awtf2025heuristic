@@ -17,8 +17,8 @@ pub(super) fn solve(input: &Input) -> Output {
     let (state, stats) = run_annealing::<Neighbors, SimdSelector, 1>(
         &env,
         state,
-        1e0,
-        1e-1,
+        1e-2,
+        1e-2,
         Duration::from_millis(1900).saturating_sub(input.since.elapsed()),
         42,
     );
@@ -37,6 +37,7 @@ neighbors! {
         RemoveActionNeigh => 1.0,
         ChangeGroupNeigh => 1.0,
         SwapPermNeigh => 1.0,
+        ToggleWall => 0.0,
     ]
 }
 
@@ -350,5 +351,68 @@ impl annealing::Neighbor for SwapPermNeigh {
 
     fn rollback(self, _env: &Self::Env, state: &mut Self::State) {
         state.perm.swap(self.index0, self.index1);
+    }
+}
+
+struct ToggleWall {
+    coord: Coord,
+    is_vertical: bool,
+}
+
+impl annealing::Neighbor for ToggleWall {
+    type Env = Env;
+    type State = State;
+
+    fn generate(
+        _env: &Self::Env,
+        state: &Self::State,
+        rng: &mut annealing::AnnealingRng,
+        _progress: f64,
+    ) -> Option<Self> {
+        loop {
+            if rng.fast_gen_range_u16x1(0..2) == 1 {
+                let (row, col) =
+                    rng.fast_gen_range_u16x2(0..Input::MAP_SIZE, 0..Input::MAP_SIZE - 1);
+                let c = Coord::new(row, col);
+
+                if !state.wall_v[c] {
+                    return Some(Self {
+                        coord: c,
+                        is_vertical: true,
+                    });
+                }
+            } else {
+                let (row, col) =
+                    rng.fast_gen_range_u16x2(0..Input::MAP_SIZE - 1, 0..Input::MAP_SIZE);
+                let c = Coord::new(row, col);
+
+                if !state.wall_h[c] {
+                    return Some(Self {
+                        coord: c,
+                        is_vertical: false,
+                    });
+                }
+            }
+        }
+    }
+
+    fn preprocess(&mut self, _env: &Self::Env, state: &mut Self::State) {
+        if self.is_vertical {
+            state.wall_v[self.coord] ^= true;
+        } else {
+            state.wall_h[self.coord] ^= true;
+        }
+    }
+
+    fn postprocess(self, _env: &Self::Env, _state: &mut Self::State) {
+        // do nothing
+    }
+
+    fn rollback(self, _env: &Self::Env, state: &mut Self::State) {
+        if self.is_vertical {
+            state.wall_v[self.coord] ^= true;
+        } else {
+            state.wall_h[self.coord] ^= true;
+        }
     }
 }
