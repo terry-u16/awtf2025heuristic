@@ -6,17 +6,43 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 pub fn solve_greedy(input: &Input, robot_order: &[usize]) -> (u32, u32) {
-    // グラフを構築
-    let graph = build_graph(input);
-
     // 現在のロボット位置
     let mut current_positions = input.init_robots.clone();
-    let mut current_map = Map2d::with_default(Input::MAP_SIZE);
-    let mut queue = Queue::new();
-    let mut fast_clear_map = FastClearArray::new(Input::MAP_SIZE * Input::MAP_SIZE);
+
+    // bit演算用の占有状態マスク
+    let mut occupied_bits = [0b1000_0000_0000_0000_0000_0000_0000_0001; Input::MAP_SIZE + 2];
 
     for c in current_positions.iter() {
-        current_map[*c] = true;
+        let coord = c;
+        occupied_bits[coord.row() + 1] |= 1u32 << (coord.col() + 1);
+    }
+
+    occupied_bits[0] = !0; // 上端
+    occupied_bits[Input::MAP_SIZE + 1] = !0; // 下端
+
+    let mut wall_bits_v = [0u32; Input::MAP_SIZE + 2];
+    let mut wall_bits_h = [0u32; Input::MAP_SIZE + 2];
+
+    for row in 0..Input::MAP_SIZE {
+        for col in 0..Input::MAP_SIZE {
+            if input.init_walls_h[row][col] {
+                wall_bits_h[row + 1] |= 1u32 << (col + 1);
+            }
+        }
+    }
+
+    //wall_bits_h[0] = !0; // 上端の壁
+    //wall_bits_h[Input::MAP_SIZE + 1] = !0; // 下端の壁
+
+    for row in 0..Input::MAP_SIZE {
+        for col in 0..Input::MAP_SIZE {
+            if input.init_walls_v[row][col] {
+                wall_bits_v[row + 1] |= 1u32 << (col + 1);
+            }
+        }
+
+        //wall_bits_v[row + 1] |= 1u32; // 左端の壁
+        //wall_bits_v[row + 1] |= 1u32 << (Input::MAP_SIZE + 1); // 右端の壁
     }
 
     let mut total_dist = 0;
@@ -34,19 +60,25 @@ pub fn solve_greedy(input: &Input, robot_order: &[usize]) -> (u32, u32) {
                 continue; // 目的地に到達しているロボットはスキップ
             }
 
-            if let Some(path) = find_dist(
-                current_positions[robot_id].to_index(Input::MAP_SIZE),
-                input.destinations[robot_id].to_index(Input::MAP_SIZE),
-                &graph,
-                &current_map,
-                &mut queue,
-                &mut fast_clear_map,
+            if let Some(dist) = find_dist(
+                current_positions[robot_id],
+                input.destinations[robot_id],
+                &occupied_bits,
+                &wall_bits_v,
+                &wall_bits_h,
             ) {
                 found = true;
-                current_map[current_positions[robot_id]] = false; // 現在位置を空にする
-                current_positions[robot_id] = input.destinations[robot_id]; // 目的地に移動
-                current_map[current_positions[robot_id]] = true; // 新しい位置を占有
-                total_dist += path as u32;
+
+                // 現在位置のビットをクリア
+                let old_coord = current_positions[robot_id];
+                occupied_bits[old_coord.row() + 1] &= !(1u32 << (old_coord.col() + 1));
+
+                // 新しい位置にロボットを配置
+                current_positions[robot_id] = input.destinations[robot_id];
+                let new_coord = current_positions[robot_id];
+                occupied_bits[new_coord.row() + 1] |= 1u32 << (new_coord.col() + 1);
+
+                total_dist += dist as u32;
             }
         }
 
@@ -67,84 +99,67 @@ pub fn solve_greedy(input: &Input, robot_order: &[usize]) -> (u32, u32) {
     (total_dist, remaining_dist)
 }
 
-fn build_graph(input: &Input) -> Map2d<[Option<CoordIndex>; 4]> {
-    let mut graph = Map2d::from_fn(|_| [None; 4], Input::MAP_SIZE);
-    let walls_v = &input.init_walls_v;
-    let walls_h = &input.init_walls_h;
-
-    for row in 0..Input::MAP_SIZE {
-        for col in 0..Input::MAP_SIZE {
-            let c = Coord::new(row, col);
-            let directions = [
-                (
-                    U,
-                    (row.wrapping_sub(1), col),
-                    row > 0 && !walls_h[row - 1][col],
-                ),
-                (
-                    R,
-                    (row, col + 1),
-                    col < Input::MAP_SIZE - 1 && !walls_v[row][col],
-                ),
-                (
-                    D,
-                    (row + 1, col),
-                    row < Input::MAP_SIZE - 1 && !walls_h[row][col],
-                ),
-                (
-                    L,
-                    (row, col.wrapping_sub(1)),
-                    col > 0 && !walls_v[row][col - 1],
-                ),
-            ];
-
-            for (dir, (new_row, new_col), can_move) in directions {
-                if can_move && new_row < Input::MAP_SIZE && new_col < Input::MAP_SIZE {
-                    graph[c][dir] = Some(Coord::new(new_row, new_col).to_index(Input::MAP_SIZE));
-                }
-            }
-        }
-    }
-
-    graph
-}
-
 fn find_dist(
-    start: CoordIndex,
-    goal: CoordIndex,
-    graph: &Map2d<[Option<CoordIndex>; 4]>,
-    current_map: &Map2d<bool>,
-    queue: &mut Queue<(CoordIndex, u32)>,
-    visited: &mut FastClearArray,
+    start: Coord,
+    goal: Coord,
+    occupied_bits: &[u32; Input::MAP_SIZE + 2],
+    wall_bits_v: &[u32; Input::MAP_SIZE + 2],
+    wall_bits_h: &[u32; Input::MAP_SIZE + 2],
 ) -> Option<u32> {
-    if current_map[goal] {
+    if occupied_bits[goal.row() + 1] & (1u32 << (goal.col() + 1)) != 0 {
         return None;
     }
 
-    queue.clear();
-    visited.clear();
+    // bit演算用の訪問済みマスク（各行を32bitで表現）
+    let mut visited = [0u32; Input::MAP_SIZE + 2];
+    visited[start.row() + 1] |= 1u32 << (start.col() + 1);
 
-    queue.push((start, 0));
-    visited.set_true(start.0);
+    for dist in 1.. {
+        let mut visited_updated = visited.clone();
+        let mut new_visited = 0;
 
-    while let Some(&(pos, dist)) = queue.pop() {
-        for direction in 0..4 {
-            if let Some(next_pos) = graph[pos][direction] {
-                if !visited.get(next_pos.0) && !current_map[next_pos] {
-                    if next_pos == goal {
-                        return Some(dist + 1);
-                    }
+        // 上方向
+        for row in 1..=Input::MAP_SIZE {
+            let bit = visited[row] & !wall_bits_h[row - 1] & !occupied_bits[row - 1];
+            new_visited |= bit & !visited[row - 1];
+            visited_updated[row - 1] |= bit;
+        }
 
-                    visited.set_true(next_pos.0);
-                    queue.push((next_pos, dist + 1));
-                }
-            }
+        // 下方向
+        for row in 1..=Input::MAP_SIZE {
+            let bit = visited[row] & !wall_bits_h[row] & !occupied_bits[row + 1];
+            new_visited |= bit & !visited[row + 1];
+            visited_updated[row + 1] |= bit;
+        }
+
+        // 左方向
+        for row in 1..=Input::MAP_SIZE {
+            let bit = (visited[row] << 1) & !wall_bits_v[row] & !occupied_bits[row];
+            new_visited |= bit & !visited[row];
+            visited_updated[row] |= bit;
+        }
+
+        // 右方向
+        for row in 1..=Input::MAP_SIZE {
+            let bit = ((visited[row] & !wall_bits_v[row]) >> 1) & !occupied_bits[row];
+            new_visited |= bit & !visited[row];
+            visited_updated[row] |= bit;
+        }
+
+        visited = visited_updated;
+
+        for r in visited.iter() {
+            eprintln!("{:032b}", r);
+        }
+
+        eprintln!();
+
+        if new_visited == 0 {
+            return None;
+        } else if visited[goal.row() + 1] & (1u32 << (goal.col() + 1)) != 0 {
+            return Some(dist);
         }
     }
 
-    None
-}
-
-fn move_robot(pos: Coord, direction: usize, graph: &Map2d<[Option<Coord>; 4]>) -> Option<Coord> {
-    graph[pos][direction]
+    unreachable!() // Should not reach here
 }
