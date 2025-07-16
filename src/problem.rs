@@ -112,6 +112,7 @@ impl Input {
     }
 }
 
+#[allow(dead_code)]
 pub struct Output {
     pub walls_v: Map2d<bool>,
     pub walls_h: Map2d<bool>,
@@ -137,6 +138,7 @@ impl Output {
         }
     }
 
+    #[allow(dead_code)]
     pub fn score(&self) -> u32 {
         self.actions.len() as u32 + self.remaining_dist * 100
     }
