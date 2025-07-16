@@ -2,12 +2,9 @@
 lto = true # コンパイル時間が著しく長くなってしまう場合は無し
 
 [package]
-name = "ahc048"
+name = "awtf2025heuristic"
 version = "0.1.0"
 edition = "2021"
-
-[package.metadata.cargo-compete.bin]
-ahc045-a = { alias = "a", problem = "https://atcoder.jp/contests/ahc045/tasks/ahc045_a" }
 
 [dependencies]
 # 202301から:

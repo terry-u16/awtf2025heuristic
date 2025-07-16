@@ -2,7 +2,7 @@ use crate::grid::{Coord, CoordIndex, Map2d, D, L, R, U};
 use itertools::Itertools;
 use proconio::{input, marker::Chars};
 
-pub(super) struct Input {
+pub struct Input {
     pub robot_count: usize,
     pub init_robots: Vec<CoordIndex>,
     pub robot_maps: Map2d<Option<usize>>,
@@ -33,50 +33,59 @@ impl Input {
             .iter()
             .map(|(_, _, r, c)| Coord::new(*r, *c).to_index(Input::MAP_SIZE))
             .collect_vec();
-        let mut init_walls_v = Map2d::with_default(Input::MAP_SIZE);
-        let mut init_walls_h = Map2d::with_default(Input::MAP_SIZE);
+
+        // 垂直壁: [MAP_SIZE][MAP_SIZE-1] (左右の壁)
+        let init_walls_v = Map2d::from_fn(
+            |coord| {
+                let row = coord.row();
+                let col = coord.col();
+                if col < Input::MAP_SIZE - 1 {
+                    v[row][col] == '1'
+                } else {
+                    false
+                }
+            },
+            Input::MAP_SIZE,
+        );
+
+        // 水平壁: [MAP_SIZE-1][MAP_SIZE] (上下の壁)
+        let init_walls_h = Map2d::from_fn(
+            |coord| {
+                let row = coord.row();
+                let col = coord.col();
+                if row < Input::MAP_SIZE - 1 {
+                    h[row][col] == '1'
+                } else {
+                    false
+                }
+            },
+            Input::MAP_SIZE,
+        );
+
         let mut init_graph = Map2d::from_fn(|_| [None; 4], Input::MAP_SIZE);
-
-        for row in 0..Input::MAP_SIZE {
-            for col in 0..Input::MAP_SIZE {
-                init_walls_v[row][col] = v[row][col] == '1';
-            }
-        }
-
-        for row in 0..Input::MAP_SIZE - 1 {
-            for col in 0..Input::MAP_SIZE {
-                init_walls_h[row][col] = h[row][col] == '1';
-            }
-        }
 
         for row in 0..Input::MAP_SIZE {
             for col in 0..Input::MAP_SIZE {
                 let c = Coord::new(row, col);
 
                 // Up
-                if row > 0 && !init_walls_h[row - 1][col] && !init_walls_v[row][col] {
-                    init_graph[c][U] = Some(c.to_index(Input::MAP_SIZE - 1));
+                if row > 0 && !init_walls_h[Coord::new(row - 1, col)] {
+                    init_graph[c][U] = Some(Coord::new(row - 1, col).to_index(Input::MAP_SIZE));
                 }
 
                 // Right
-                if col < Input::MAP_SIZE - 1
-                    && !init_walls_v[row][col + 1]
-                    && !init_walls_h[row][col]
-                {
-                    init_graph[c][R] = Some(c.to_index(Input::MAP_SIZE - 1));
+                if col < Input::MAP_SIZE - 1 && !init_walls_v[Coord::new(row, col)] {
+                    init_graph[c][R] = Some(Coord::new(row, col + 1).to_index(Input::MAP_SIZE));
                 }
 
                 // Down
-                if row < Input::MAP_SIZE - 1
-                    && !init_walls_h[row][col]
-                    && !init_walls_v[row + 1][col]
-                {
-                    init_graph[c][D] = Some(c.to_index(Input::MAP_SIZE - 1));
+                if row < Input::MAP_SIZE - 1 && !init_walls_h[Coord::new(row, col)] {
+                    init_graph[c][D] = Some(Coord::new(row + 1, col).to_index(Input::MAP_SIZE));
                 }
 
                 // Left
-                if col > 0 && !init_walls_v[row][col - 1] && !init_walls_h[row][col] {
-                    init_graph[c][L] = Some(c.to_index(Input::MAP_SIZE - 1));
+                if col > 0 && !init_walls_v[Coord::new(row, col - 1)] {
+                    init_graph[c][L] = Some(Coord::new(row, col - 1).to_index(Input::MAP_SIZE));
                 }
             }
         }
@@ -93,25 +102,90 @@ impl Input {
     }
 }
 
-pub(super) struct Output {
+pub struct Output {
     pub walls_v: Map2d<bool>,
     pub walls_h: Map2d<bool>,
+    pub groups: Vec<usize>,
     pub actions: Vec<Action>,
     pub score: u32,
 }
 
 impl Output {
-    pub(super) fn new(
+    pub fn new(
         walls_v: Map2d<bool>,
         walls_h: Map2d<bool>,
+        groups: Vec<usize>,
         actions: Vec<Action>,
         score: u32,
     ) -> Self {
         Self {
             walls_v,
             walls_h,
+            groups,
             actions,
             score,
+        }
+    }
+
+    pub fn write(&self) {
+        // 壁の情報を出力
+        for row in 0..Input::MAP_SIZE {
+            let mut line = String::new();
+            for col in 0..Input::MAP_SIZE - 1 {
+                line.push(if self.walls_v[Coord::new(row, col)] {
+                    '1'
+                } else {
+                    '0'
+                });
+            }
+            println!("{}", line);
+        }
+
+        for row in 0..Input::MAP_SIZE - 1 {
+            let mut line = String::new();
+            for col in 0..Input::MAP_SIZE {
+                line.push(if self.walls_h[Coord::new(row, col)] {
+                    '1'
+                } else {
+                    '0'
+                });
+            }
+            println!("{}", line);
+        }
+
+        // グループの情報を出力
+        for (i, &group) in self.groups.iter().enumerate() {
+            if i > 0 {
+                print!(" ");
+            }
+            print!("{}", group);
+        }
+        println!();
+
+        // アクションの情報を出力
+        for action in &self.actions {
+            match action {
+                Action::Group(m) => {
+                    let direction = match m.direction {
+                        U => "U",
+                        R => "R",
+                        D => "D",
+                        L => "L",
+                        _ => panic!("Invalid direction"),
+                    };
+                    println!("g {} {}", m.index, direction);
+                }
+                Action::Robot(m) => {
+                    let direction = match m.direction {
+                        U => "U",
+                        R => "R",
+                        D => "D",
+                        L => "L",
+                        _ => panic!("Invalid direction"),
+                    };
+                    println!("i {} {}", m.index, direction);
+                }
+            }
         }
     }
 }

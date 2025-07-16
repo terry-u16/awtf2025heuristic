@@ -2,7 +2,7 @@
 version = "0.2.0"
 
 [problem]
-problem_name = "ahc048"
+problem_name = "awtf2025heuristic"
 objective = "Min"
 score_regex = '(?m)^\s*Score\s*=\s*(?P<score>\d+)\s*$'
 
