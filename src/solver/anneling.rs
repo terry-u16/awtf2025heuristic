@@ -17,7 +17,7 @@ pub(super) fn solve(input: &Input, clusters: Vec<Vec<usize>>) -> Output {
         state,
         1e-2,
         1e-2,
-        Duration::from_millis(1900).saturating_sub(input.since.elapsed()),
+        Duration::from_millis(1980).saturating_sub(input.since.elapsed()),
         42,
     );
 

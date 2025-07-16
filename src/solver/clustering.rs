@@ -20,7 +20,7 @@ pub(super) fn make_clusters(input: &Input) -> Vec<Vec<usize>> {
             state,
             5e0,
             1e-1,
-            Duration::from_millis(50),
+            Duration::from_millis(10),
             42,
         );
 
