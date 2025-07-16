@@ -9,11 +9,27 @@ use std::{cmp::Reverse, time::Duration};
 
 pub(super) fn solve(input: &Input) -> Output {
     let env = Env::new(input.clone(), 5);
-    let state = State::new(
-        input,
-        (0..input.robot_count).collect(),
-        (0..input.robot_count).map(|i| i % env.max_group).collect(),
-    );
+    let groups = (0..input.robot_count)
+        .map(|i| {
+            let dr = input.destinations[i].row() as i32 - input.init_robots[i].row() as i32;
+            let dc = input.destinations[i].col() as i32 - input.init_robots[i].col() as i32;
+
+            if dr.abs() > dc.abs() {
+                if dr > 0 {
+                    D
+                } else {
+                    U
+                }
+            } else {
+                if dc > 0 {
+                    R
+                } else {
+                    L
+                }
+            }
+        })
+        .collect();
+    let state = State::new(input, (0..input.robot_count).collect(), groups);
     let (state, stats) = run_annealing::<Neighbors, SimdSelector, 1>(
         &env,
         state,
