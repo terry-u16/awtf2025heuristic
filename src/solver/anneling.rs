@@ -32,11 +32,11 @@ neighbors! {
     State,
     [
         AddActionNeigh => 1.0,
-        RemoveActionNeigh => 1.0,
-        ChangeGroupNeigh => 1.0,
-        SwapPermNeigh => 1.0,
+        RemoveActionNeigh => 0.3,
+        ChangeGroupNeigh => 0.1,
+        SwapPermNeigh => 0.1,
         ToggleWall => 1.0,
-        SwapActionOrderNeigh => 1.0,
+        SwapActionOrderNeigh => 0.5,
     ]
 }
 
@@ -477,7 +477,7 @@ impl annealing::Neighbor for ToggleWall {
         rng: &mut annealing::AnnealingRng,
         _progress: f64,
     ) -> Option<Self> {
-        if rng.gen_bool(0.1) {
+        if rng.gen_bool(0.25) {
             // 壁追加
             if rng.gen_bool(0.5) {
                 let slice = state.unused_walls_v.as_slice();
