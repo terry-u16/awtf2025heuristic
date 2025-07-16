@@ -1,4 +1,4 @@
-use crate::grid::{Coord, CoordIndex, Map2d, D, L, R, U};
+use crate::grid::{Coord, Map2d, D, L, R, U};
 use crate::problem::{Action, Input, Move, Output};
 use rand::prelude::*;
 use std::collections::VecDeque;
@@ -78,8 +78,8 @@ fn solve_greedy(input: &Input, rng: &mut impl Rng) -> Output {
     // スコア計算
     let mut total_distance = 0;
     for i in 0..input.robot_count {
-        let current_coord = current_positions[i].to_coord(Input::MAP_SIZE);
-        let dest_coord = input.destinations[i].to_coord(Input::MAP_SIZE);
+        let current_coord = current_positions[i];
+        let dest_coord = input.destinations[i];
         total_distance += current_coord.dist(&dest_coord);
     }
 
@@ -95,7 +95,7 @@ fn build_graph(
     _input: &Input,
     walls_v: &Map2d<bool>,
     walls_h: &Map2d<bool>,
-) -> Map2d<[Option<CoordIndex>; 4]> {
+) -> Map2d<[Option<Coord>; 4]> {
     let mut graph = Map2d::from_fn(|_| [None; 4], Input::MAP_SIZE);
 
     for row in 0..Input::MAP_SIZE {
@@ -126,7 +126,7 @@ fn build_graph(
 
             for (dir, (new_row, new_col), can_move) in directions {
                 if can_move && new_row < Input::MAP_SIZE && new_col < Input::MAP_SIZE {
-                    graph[c][dir] = Some(Coord::new(new_row, new_col).to_index(Input::MAP_SIZE));
+                    graph[c][dir] = Some(Coord::new(new_row, new_col));
                 }
             }
         }
@@ -136,10 +136,10 @@ fn build_graph(
 }
 
 fn find_path(
-    start: CoordIndex,
-    goal: CoordIndex,
-    graph: &Map2d<[Option<CoordIndex>; 4]>,
-    current_positions: &[CoordIndex],
+    start: Coord,
+    goal: Coord,
+    graph: &Map2d<[Option<Coord>; 4]>,
+    current_positions: &[Coord],
     robot_id: usize,
 ) -> Vec<usize> {
     let mut queue = VecDeque::new();
@@ -154,7 +154,7 @@ fn find_path(
             break;
         }
 
-        let current_coord = current.to_coord(Input::MAP_SIZE);
+        let current_coord = current;
         for direction in 0..4 {
             if let Some(next_pos) = graph[current_coord][direction] {
                 if !visited[next_pos] {
@@ -187,11 +187,6 @@ fn find_path(
     path
 }
 
-fn move_robot(
-    pos: CoordIndex,
-    direction: usize,
-    graph: &Map2d<[Option<CoordIndex>; 4]>,
-) -> Option<CoordIndex> {
-    let coord = pos.to_coord(Input::MAP_SIZE);
-    graph[coord][direction]
+fn move_robot(pos: Coord, direction: usize, graph: &Map2d<[Option<Coord>; 4]>) -> Option<Coord> {
+    graph[pos][direction]
 }

@@ -1,15 +1,18 @@
-use crate::grid::{Coord, CoordIndex, Map2d, D, L, R, U};
+use crate::grid::{Coord, Map2d, D, L, R, U};
 use itertools::Itertools;
 use proconio::{input, marker::Chars};
+use std::time::Instant;
 
+#[derive(Debug, Clone)]
 pub struct Input {
     pub robot_count: usize,
-    pub init_robots: Vec<CoordIndex>,
+    pub init_robots: Vec<Coord>,
     pub robot_maps: Map2d<Option<usize>>,
-    pub destinations: Vec<CoordIndex>,
+    pub destinations: Vec<Coord>,
     pub init_walls_v: Map2d<bool>,
     pub init_walls_h: Map2d<bool>,
-    pub init_graph: Map2d<[Option<CoordIndex>; 4]>,
+    pub init_graph: Map2d<[Option<Coord>; 4]>,
+    pub since: Instant,
 }
 
 impl Input {
@@ -24,15 +27,21 @@ impl Input {
             h: [Chars; n - 1],
         }
 
+        let since = Instant::now();
+
         let init_robots = robots
             .iter()
-            .map(|(r, c, _, _)| Coord::new(*r, *c).to_index(Input::MAP_SIZE))
+            .map(|(r, c, _, _)| Coord::new(*r, *c))
             .collect_vec();
-        let robot_maps = Map2d::with_default(Self::MAP_SIZE);
+        let mut robot_maps = Map2d::with_default(Self::MAP_SIZE);
         let destinations = robots
             .iter()
-            .map(|(_, _, r, c)| Coord::new(*r, *c).to_index(Input::MAP_SIZE))
+            .map(|(_, _, r, c)| Coord::new(*r, *c))
             .collect_vec();
+
+        for (i, c) in init_robots.iter().enumerate() {
+            robot_maps[*c] = Some(i);
+        }
 
         // 垂直壁: [MAP_SIZE][MAP_SIZE-1] (左右の壁)
         let init_walls_v = Map2d::from_fn(
@@ -70,22 +79,22 @@ impl Input {
 
                 // Up
                 if row > 0 && !init_walls_h[Coord::new(row - 1, col)] {
-                    init_graph[c][U] = Some(Coord::new(row - 1, col).to_index(Input::MAP_SIZE));
+                    init_graph[c][U] = Some(Coord::new(row - 1, col));
                 }
 
                 // Right
                 if col < Input::MAP_SIZE - 1 && !init_walls_v[Coord::new(row, col)] {
-                    init_graph[c][R] = Some(Coord::new(row, col + 1).to_index(Input::MAP_SIZE));
+                    init_graph[c][R] = Some(Coord::new(row, col + 1));
                 }
 
                 // Down
                 if row < Input::MAP_SIZE - 1 && !init_walls_h[Coord::new(row, col)] {
-                    init_graph[c][D] = Some(Coord::new(row + 1, col).to_index(Input::MAP_SIZE));
+                    init_graph[c][D] = Some(Coord::new(row + 1, col));
                 }
 
                 // Left
                 if col > 0 && !init_walls_v[Coord::new(row, col - 1)] {
-                    init_graph[c][L] = Some(Coord::new(row, col - 1).to_index(Input::MAP_SIZE));
+                    init_graph[c][L] = Some(Coord::new(row, col - 1));
                 }
             }
         }
@@ -98,6 +107,7 @@ impl Input {
             init_walls_v,
             init_walls_h,
             init_graph,
+            since,
         }
     }
 }
@@ -202,4 +212,10 @@ pub struct Move {
     pub index: usize,
     /// U, R, D, L
     pub direction: usize,
+}
+
+impl Move {
+    pub fn new(index: usize, direction: usize) -> Self {
+        Self { index, direction }
+    }
 }

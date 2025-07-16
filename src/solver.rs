@@ -1,7 +1,8 @@
 mod naive;
+mod rand_greedy;
 
 use crate::problem::{Input, Output};
 
 pub fn solve(input: &Input) -> Output {
-    naive::solve(input)
+    rand_greedy::solve(input)
 }
