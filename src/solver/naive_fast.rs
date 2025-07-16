@@ -6,7 +6,7 @@ pub fn solve_greedy(input: &Input, robot_order: &[usize]) -> (u32, u32) {
     let mut current_positions = input.init_robots.clone();
 
     // bit演算用の占有状態マスク
-    let mut occupied_bits = [0b1000_0000_0000_0000_0000_0000_0000_0001; Input::MAP_SIZE];
+    let mut occupied_bits = [0b1100_0000_0000_0000_0000_0000_0000_0000; Input::MAP_SIZE];
 
     for c in current_positions.iter() {
         let coord = c;
@@ -18,17 +18,13 @@ pub fn solve_greedy(input: &Input, robot_order: &[usize]) -> (u32, u32) {
 
     for row in 0..Input::MAP_SIZE {
         for col in 0..Input::MAP_SIZE {
-            if input.init_walls_h[row][col] {
-                wall_bits_h[row] |= 1u32 << col;
-            }
+            wall_bits_h[row] |= (input.init_walls_h[row][col] as u32) << col;
         }
     }
 
     for row in 0..Input::MAP_SIZE {
         for col in 0..Input::MAP_SIZE {
-            if input.init_walls_v[row][col] {
-                wall_bits_v[row] |= 1u32 << col;
-            }
+            wall_bits_v[row] |= (input.init_walls_v[row][col] as u32) << col;
         }
     }
 
